@@ -1,0 +1,3297 @@
+{
+  "name": "AI Terminassistent – SHK",
+  "nodes": [
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "id": "8a49ff8f-1897-4945-a37c-ba870e03a383",
+      "name": "Aufruf durch Hauptworkflow",
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        -2544,
+        1936
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Zentrale Terminregeln. Betriebsspezifische Werte kommen aus betrieb.termin\n// (Hauptworkflow → Betriebskonfiguration) und überschreiben diese Standards.\nconst STANDARD = {\n  modus: 'test',                       // test | vorschlagen | automatisch_buchen\n  zeitzone: 'Europe/Berlin',           // Anzeige; gespeichert wird immer UTC\n  kalender: { anbieter: 'test', ressource_id: 'team-1', outlook: { postfach: '', kalender_id: '' } },\n  oeffnungszeiten: [\n    { tage: [1, 2, 3, 4], von: '08:00', bis: '17:00' },   // 1 = Montag … 7 = Sonntag\n    { tage: [5], von: '08:00', bis: '14:00' }\n  ],\n  pausen: [{ von: '12:00', bis: '12:30' }],\n  gesperrte_tage: [],                  // ['2026-12-24', …] (lokales Datum)\n  gesperrte_zeitraeume: [],            // [{ von: '2026-10-05T08:00', bis: '2026-10-09T17:00', grund: 'Urlaub' }] (lokale Zeit)\n  fruehester_termin_stunden: 24,\n  horizont_tage: 14,\n  raster_minuten: 30,\n  puffer_vor_minuten: 15,\n  puffer_nach_minuten: 15,\n  max_termine_pro_tag: 4,\n  anzahl_vorschlaege: 3,\n  ein_vorschlag_pro_tag: true,\n  vorschlag_gueltig_stunden: 48,\n  max_vorschlagsrunden: 2,             // danach Wunschzeitraum erfragen + Mitarbeiteraufgabe\n  reservierung_ablauf_minuten: 10,     // ältere, nicht gebuchte Reservierungen gelten als abgelaufen\n  einsatzgebiet: { plz: [], orte: [] }, // PLZ oder PLZ-Präfixe, Ortsnamen\n  erlaubte_dringlichkeiten: ['niedrig', 'normal'],\n  fehlende_angaben_blockieren: true,\n  vorabpruefung_stichworte: ['ersatzteil', 'sonderanfertigung', 'gutachten', 'dichtheitsprüfung', 'druckprüfung', 'abgasmessung', 'schornstein', 'asbest', 'elektroanschluss', 'starkstrom', 'kältemittel', 'kaeltemittel'],\n  terminarten: {\n    wartung: { bezeichnung: 'Wartung', automatisch: true, dauer_minuten: 90, stichworte: ['wartung', 'inspektion', 'jahreswartung'], kategorien: ['Wartung'] },\n    reparatur_planbar: { bezeichnung: 'planbare Reparatur', automatisch: true, dauer_minuten: 120, stichworte: ['reparatur', 'reparieren', 'tropft', 'austauschen', 'tauschen', 'erneuern'], kategorien: [] },\n    beratung_besichtigung: { bezeichnung: 'Beratung/Besichtigung vor Ort', automatisch: true, dauer_minuten: 60, stichworte: ['beratung', 'besichtigung', 'beraten', 'vor ort anschauen'], kategorien: ['Neuinstallation'] },\n    heizkoerper_thermostat: { bezeichnung: 'Heizkörper/Thermostat', automatisch: true, dauer_minuten: 60, stichworte: ['heizkörper', 'heizkoerper', 'thermostat', 'entlüften', 'entlueften'], kategorien: [] },\n    angebot_grossauftrag: { bezeichnung: 'Angebot/Großauftrag', automatisch: false, dauer_minuten: null, stichworte: ['angebot', 'kostenvoranschlag', 'sanierung', 'badumbau', 'neue heizung', 'wärmepumpe', 'waermepumpe', 'komplett erneuern'], kategorien: ['Angebotsanfrage'] }\n  }\n};\n\nconst eingang = $input.first().json;\nconst istObjekt = v => v !== null && typeof v === 'object' && !Array.isArray(v);\nconst mischen = (basis, extra) => {\n  if (!istObjekt(extra)) return basis;\n  const out = Object.assign({}, basis);\n  for (const [k, v] of Object.entries(extra)) out[k] = istObjekt(v) && istObjekt(basis[k]) ? mischen(basis[k], v) : v;\n  return out;\n};\nconst betrieb = istObjekt(eingang.betrieb) ? eingang.betrieb : {};\nconst cfg = mischen(STANDARD, betrieb.termin);\n\nconst fehler = [];\nconst UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\nconst HHMM = /^([01]\\d|2[0-3]):[0-5]\\d$/;\nif (!UUID.test(String(betrieb.betrieb_id || ''))) fehler.push('betrieb_id fehlt oder ist ungültig');\nif (!/^https:\\/\\/[^\\s/]+/.test(String(betrieb.supabase_url || ''))) fehler.push('supabase_url fehlt oder ist ungültig');\nif (!['test', 'vorschlagen', 'automatisch_buchen'].includes(cfg.modus)) fehler.push('modus ungültig');\nif (!istObjekt(cfg.kalender) || !['test', 'outlook'].includes(cfg.kalender.anbieter)) fehler.push('kalender.anbieter ungültig');\nelse {\n  if (!String(cfg.kalender.ressource_id || '').trim()) fehler.push('kalender.ressource_id fehlt');\n  if (cfg.kalender.anbieter === 'outlook' && !String((cfg.kalender.outlook || {}).postfach || '').includes('@')) fehler.push('kalender.outlook.postfach fehlt');\n}\nif (!DateTime.now().setZone(String(cfg.zeitzone)).isValid) fehler.push('zeitzone ungültig');\nconst zahl = (k, min, max) => { const v = Number(cfg[k]); if (!Number.isFinite(v) || v < min || v > max) fehler.push(k + ' ungültig'); };\nzahl('fruehester_termin_stunden', 0, 720); zahl('horizont_tage', 1, 90); zahl('raster_minuten', 5, 240);\nzahl('puffer_vor_minuten', 0, 240); zahl('puffer_nach_minuten', 0, 240); zahl('max_termine_pro_tag', 1, 50);\nzahl('anzahl_vorschlaege', 1, 5); zahl('vorschlag_gueltig_stunden', 1, 720);\nzahl('max_vorschlagsrunden', 1, 5); zahl('reservierung_ablauf_minuten', 5, 120);\nif (!Array.isArray(cfg.oeffnungszeiten) || !cfg.oeffnungszeiten.length) fehler.push('oeffnungszeiten fehlen');\nelse cfg.oeffnungszeiten.forEach((f, i) => {\n  if (!Array.isArray(f.tage) || !f.tage.every(t => Number.isInteger(t) && t >= 1 && t <= 7) || !HHMM.test(f.von) || !HHMM.test(f.bis) || f.von >= f.bis) fehler.push('oeffnungszeiten[' + i + '] ungültig');\n});\n(Array.isArray(cfg.pausen) ? cfg.pausen : []).forEach((p, i) => { if (!HHMM.test(p.von) || !HHMM.test(p.bis) || p.von >= p.bis) fehler.push('pausen[' + i + '] ungültig'); });\n(Array.isArray(cfg.gesperrte_zeitraeume) ? cfg.gesperrte_zeitraeume : []).forEach((z, i) => {\n  const v = DateTime.fromISO(String(z.von), { zone: cfg.zeitzone }); const b = DateTime.fromISO(String(z.bis), { zone: cfg.zeitzone });\n  if (!v.isValid || !b.isValid || b <= v) fehler.push('gesperrte_zeitraeume[' + i + '] ungültig');\n});\nif (!istObjekt(cfg.terminarten)) fehler.push('terminarten fehlen');\nif (fehler.length) throw new Error('Terminkonfiguration ungültig: ' + fehler.join('; '));\n\n// Testuhr und Testkalender-Daten nur mit dem Testkalender – nie mit einem echten Kalender.\n// Quelle: Aufruf (test) oder Testkonfiguration des Betriebs (termin.test).\nconst testQuelle = istObjekt(eingang.test) ? eingang.test : (istObjekt(cfg.test) ? cfg.test : {});\nconst test = cfg.kalender.anbieter === 'test' ? testQuelle : {};\nlet jetzt = DateTime.utc();\nif (test.jetzt_utc) {\n  jetzt = DateTime.fromISO(String(test.jetzt_utc), { zone: 'utc' });\n  if (!jetzt.isValid) throw new Error('test.jetzt_utc ungültig');\n}\n\nconst aktion = String(eingang.aktion || '').trim();\nconst anfrage = istObjekt(eingang.anfrage) ? eingang.anfrage : {};\nconst basis = {\n  aktion,\n  kanal: String(eingang.kanal || '').trim() || 'unbekannt',\n  betrieb_id: betrieb.betrieb_id,\n  supabase_url: String(betrieb.supabase_url).replace(/\\/+$/, ''),\n  cfg,\n  anfrage,\n  kunden_nachricht: String(eingang.kunden_nachricht || '').slice(0, 1000),\n  wunsch: istObjekt(eingang.wunsch) ? eingang.wunsch : {},\n  test,\n  jetzt_utc: jetzt.toISO(),\n  zeitraum: { von_utc: jetzt.minus({ days: 1 }).toISO(), bis_utc: jetzt.plus({ days: Number(cfg.horizont_tage) + 2 }).toISO() }\n};\n\n// Aktionen: vorschlagen, bestaetigen, kundenantwort (kanalneutral), anzeigen, verschieben, stornieren,\n// verfuegbarkeit (nur lesen, z. B. Telefon) und direkt_buchen (ausdrücklich bestätigter Wunschtermin).\nconst MIT_ID = ['bestaetigen', 'kundenantwort', 'anzeigen', 'verschieben', 'stornieren', 'direkt_buchen'];\nconst idOk = UUID.test(String(anfrage.anfrage_db_id || ''));\nif (aktion === 'verfuegbarkeit') return [{ json: Object.assign({}, basis, { weiter: 'eignung_pruefen' }) }];\nif (aktion === 'vorschlagen') return [{ json: Object.assign({}, basis, { weiter: idOk ? 'terminwahl_lesen' : 'eignung_pruefen' }) }];\nif (MIT_ID.includes(aktion)) {\n  if (!idOk) {\n    return [{ json: Object.assign({}, basis, { weiter: 'mitarbeiter', mitarbeiter: { aufgabe_anlegen: false, termin_status: null, gruende: ['Anfrage-ID fehlt – Terminvorgang nicht zuordenbar'], kunden_nachricht: '' } }) }];\n  }\n  if (aktion === 'direkt_buchen' && !DateTime.fromISO(String(basis.wunsch.start_utc || ''), { zone: 'utc' }).isValid) {\n    return [{ json: Object.assign({}, basis, { weiter: 'antwort', antwort: { ergebnis: 'ungueltig', gruende: ['Wunschtermin fehlt oder ist ungültig'] } }) }];\n  }\n  return [{ json: Object.assign({}, basis, { weiter: 'terminwahl_lesen' }) }];\n}\nreturn [{ json: Object.assign({}, basis, { weiter: 'antwort', antwort: { ergebnis: 'fehler', gruende: ['Unbekannte Aktion „' + aktion + '“'] } }) }];\n"
+      },
+      "id": "9f4d55f3-aee5-489a-af0a-f23649fecab9",
+      "name": "Terminkonfiguration",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -2096,
+        1936
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r-0",
+                    "leftValue": "={{ $json.weiter }}",
+                    "rightValue": "eignung_pruefen",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "eignung_pruefen"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r-1",
+                    "leftValue": "={{ $json.weiter }}",
+                    "rightValue": "belegung_lesen",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "belegung_lesen"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r-2",
+                    "leftValue": "={{ $json.weiter }}",
+                    "rightValue": "terminwahl_lesen",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "terminwahl_lesen"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r-3",
+                    "leftValue": "={{ $json.weiter }}",
+                    "rightValue": "vorschlaege_speichern",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "vorschlaege_speichern"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r-4",
+                    "leftValue": "={{ $json.weiter }}",
+                    "rightValue": "reservieren",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "reservieren"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r-5",
+                    "leftValue": "={{ $json.weiter }}",
+                    "rightValue": "konflikt_nachlesen",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "konflikt_nachlesen"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r-6",
+                    "leftValue": "={{ $json.weiter }}",
+                    "rightValue": "buchen",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "buchen"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r-7",
+                    "leftValue": "={{ $json.weiter }}",
+                    "rightValue": "mitarbeiter",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "mitarbeiter"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r-8",
+                    "leftValue": "={{ $json.weiter }}",
+                    "rightValue": "aufgabe_anlegen",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "aufgabe_anlegen"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r-9",
+                    "leftValue": "={{ $json.weiter }}",
+                    "rightValue": "status_schreiben",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "status_schreiben"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r-10",
+                    "leftValue": "={{ $json.weiter }}",
+                    "rightValue": "status_patch",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "status_patch"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r-11",
+                    "leftValue": "={{ $json.weiter }}",
+                    "rightValue": "antwort",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "antwort"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r-12",
+                    "leftValue": "={{ $json.weiter }}",
+                    "rightValue": "kalender_aktion",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "kalender_aktion"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r-13",
+                    "leftValue": "={{ $json.weiter }}",
+                    "rightValue": "verschieben_db",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "verschieben_db"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r-14",
+                    "leftValue": "={{ $json.weiter }}",
+                    "rightValue": "verschieben_historie",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "verschieben_historie"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r-15",
+                    "leftValue": "={{ $json.weiter }}",
+                    "rightValue": "storno_db",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "storno_db"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r-16",
+                    "leftValue": "={{ $json.weiter }}",
+                    "rightValue": "direkt_reservieren",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "direkt_reservieren"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r-17",
+                    "leftValue": "={{ $json.weiter }}",
+                    "rightValue": "termine_berechnen",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "termine_berechnen"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r-18",
+                    "leftValue": "={{ $json.weiter }}",
+                    "rightValue": "reservierungen_freigeben",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "reservierungen_freigeben"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r-19",
+                    "leftValue": "={{ $json.weiter }}",
+                    "rightValue": "freigabe_aufgaben",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "freigabe_aufgaben"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "r-20",
+                    "leftValue": "={{ $json.weiter }}",
+                    "rightValue": "ablehnung_speichern",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "ablehnung_speichern"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "Unbekannt"
+        }
+      },
+      "id": "e3225c91-de6b-490a-843c-762711f1c1ad",
+      "name": "Nächsten Schritt wählen",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        -1664,
+        1600
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const K = $('Terminkonfiguration').first().json;\nconst cfg = K.cfg;\nconst a = K.anfrage || {};\nconst UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\nconst anfrageOk = UUID.test(String(a.anfrage_db_id || ''));\nconst TEXT_PERSOENLICH = 'Vielen Dank für Ihre Rückmeldung. Ihren Termin stimmt unser Serviceteam persönlich mit Ihnen ab.';\n\n// Regelbasierte Prüfung: nur eindeutig planbare Standardfälle werden automatisch terminiert.\nconst t = v => String(v ?? '').trim();\nconst W = $('Terminwahl erkennen').isExecuted ? $('Terminwahl erkennen').first().json : null;\nconst aktion = W && W.aktion ? W.aktion : K.aktion;\nconst gewaehlt = W && W.gewaehlt ? W.gewaehlt : null;\nconst verschiebung = W && W.verschiebung ? W.verschiebung : null;\nconst anliegen = t(a.technisches_anliegen);\nconst anliegenText = (t(a.kategorie) + ' ' + anliegen).toLowerCase();\nconst gesamt = (anliegenText + ' ' + t(K.kunden_nachricht)).toLowerCase();\nconst gruende = [];\nlet notfall = false;\n\nif (!anfrageOk && aktion !== 'verfuegbarkeit') gruende.push('Anfrage-ID fehlt – Termin nicht zuordenbar');\n\n// Jede Gefahrenart wird getrennt als vorhanden, verneint oder unklar bewertet.\n// Eine Verneinung wirkt nur in ihrem eigenen Teilsatz; \"Gas nicht abstellbar\" bleibt Notfall.\nfunction gefahrenlage(roh){const N=String(roh||'').toLowerCase().replace(/ä/g,'ae').replace(/ö/g,'oe').replace(/ü/g,'ue').replace(/ß/g,'ss').replace(/\\s+/g,' ').trim();const Z={gas:'nicht_erwaehnt',wasser:'nicht_erwaehnt',brand:'nicht_erwaehnt',strom:'nicht_erwaehnt',dringend:'nicht_erwaehnt',versorgung:'nicht_erwaehnt'};const B=[];if(N){const T=N.split(/[.!?;:\\n]+|,| und | sowie | aber | jedoch | allerdings | dennoch | sondern | trotzdem | doch /).map(s=>s.trim()).filter(Boolean);const I={gas:/gasgeruch|gasaustritt|gasleck|gasverlust|\\bgas\\b|kohlenmonoxid|\\bco[- ]?(melder|warner)\\b|propan|fluessiggas|(gasleitung|gasrohr|gashahn|gastherme)\\s+(\\w+\\s+){0,3}(zischt|undicht|leckt|riecht|offen)|(zischt|riecht|pfeift)\\s+(\\w+\\s+){0,4}(gasleitung|gasrohr|gashahn)/,wasser:/wasseraustritt|wasserschaden|rohrbruch|ueberschwemm|ueberflut|\\bleck\\b|leckage|undicht|wasser im keller|pfuetze|(rohr|leitung|schlauch|ventil|therme|boiler|speicher|heizung)\\s+(\\w+\\s+){0,2}(geplatzt|gebrochen|gerissen|undicht|laeuft aus)|\\bwasser\\b\\s*(\\w+\\s+){0,2}(tritt|laeuft|spritzt|stroemt|sprudelt|steht|dringt)|(tritt|laeuft|spritzt|stroemt|sprudelt|steht|dringt)\\s+(\\w+\\s+){0,3}\\bwasser\\b|(nasse|nasser|nasses|feuchte|feuchter|feuchtes)\\s+(wand|waende|decke|boden|keller)|(wand|waende|decke|boden|keller|teppich|estrich)\\s+(\\w+\\s+){0,3}(feucht|nass|durchnaesst)/,brand:/brandgeruch|\\brauch\\b|rauchmelder|qualm|verbrannt|verschmort|schmor|\\bfeuer\\b|\\bbrennt\\b|\\bbrand\\b|funken|russ/,strom:/stromschlag|kurzschluss|kabelbrand|elektrischer schlag/};const D=/\\bnotfall\\b|\\bdringend\\b|\\bsofort\\b|\\beilt\\b|so schnell wie moeglich|\\bakut\\b|\\bumgehend\\b/;const V=/kein(e|en)? (heizung|warmwasser|warmes wasser)|(heizung|warmwasser) (ist |faellt )?(komplett )?(ausgefallen|aus)\\b|heizung geht nicht|warmwasser (geht|funktioniert) nicht/;const NEG=/^(kein|keine|keinen|keiner|keinem|keines|keinerlei|nicht|nichts|nie|niemals|ohne|weder|noch|frei|unauffaellig|negativ|trocken|dicht)$/;const U=/vielleicht|moeglicherweise|eventuell|\\bevtl\\b|unsicher|unklar|weiss (ich )?nicht|keine ahnung|kann ich nicht sagen|nicht sicher|ob (es|da|dort|irgendwo)|schwer zu sagen/;const H=/(nicht|nichts|niemand)\\s+(\\w+\\s+){0,3}(abstellen|abdrehen|zudrehen|absperren|abschalten|ausschalten|stoppen|schliessen|loeschen|erreichen|finden|beheben|stillen|aufhalten)|(abstellen|abdrehen|zudrehen|absperren|abschalten|ausschalten|stoppen|schliessen|loeschen|erreichen|finden|beheben|stillen|aufhalten)\\s+(\\w+\\s+){0,2}nicht\\b/;const TR=/(leitung|rohr|boden|waende|wand|decke|keller|stelle|alles|es|hier|dort)\\s+(ist |sind |bleibt |war |scheint |wirkt )?(komplett |voellig |ganz |wieder )?(trocken|dicht)\\b/;const R={nicht_erwaehnt:0,verneint:1,unklar:2,vorhanden:3};const setze=(art,wert,teil)=>{if(R[wert]>R[Z[art]]){Z[art]=wert;B.push(art+': '+wert+' ('+teil.slice(0,60)+')');}};const bewerte=(teil,tr)=>{if(H.test(teil))return 'vorhanden';if(U.test(teil))return 'unklar';const w=teil.split(' ');const i=teil.slice(0,tr.index).split(' ').length-1;const L=String(tr[0]||'').split(' ').length;for(let j=Math.max(0,i-4);j<Math.min(w.length,i+L+4);j++){if(NEG.test(String(w[j]||'').replace(/[^a-z]/g,'')))return 'verneint';}return 'vorhanden';};for(const teil of T){for(const art of ['gas','wasser','brand','strom']){const tr=I[art].exec(teil);if(tr)setze(art,bewerte(teil,tr),teil);}if(TR.test(teil)&&Z.wasser==='nicht_erwaehnt')setze('wasser','verneint',teil);const d=D.exec(teil);if(d)setze('dringend',bewerte(teil,d),teil);if(V.test(teil))setze('versorgung','vorhanden',teil);}}const arten=['gas','wasser','brand','strom'];const vor=arten.filter(a=>Z[a]==='vorhanden');const notfall=vor.length>0||Z.dringend==='vorhanden'||Z.versorgung==='vorhanden';return{gas:Z.gas,wasser:Z.wasser,brand:Z.brand,strom:Z.strom,dringend:Z.dringend,versorgung:Z.versorgung,notfall:notfall,unklar:arten.some(a=>Z[a]==='unklar'),notfall_art:vor.indexOf('gas')>=0?'gas':(vor.indexOf('wasser')>=0?'wasser':(notfall?'sonstig':'')),begruendung:B};}\n\nconst uebergeben = (a.gefahren && typeof a.gefahren === 'object' && a.gefahren.gas_gefahr) ? a.gefahren : null;\nconst G = uebergeben\n  ? { gas: uebergeben.gas_gefahr, wasser: uebergeben.wasser_gefahr, brand: uebergeben.brand_gefahr, strom: uebergeben.strom_gefahr, dringend: uebergeben.dringend, versorgung: uebergeben.versorgung_ausfall, unklar: uebergeben.unklar === true }\n  : gefahrenlage(gesamt);\nconst dring = t(a.dringlichkeit).toLowerCase() || 'normal';\n\nif (G.gas === 'vorhanden') { gruende.push('Verdacht auf Gas oder CO – Notfall, nur durch Mitarbeiter'); notfall = true; }\nif (G.wasser === 'vorhanden' || (t(a.kategorie) === 'Wasserschaden' && G.wasser !== 'verneint')) { gruende.push('Wasseraustritt oder Rohrbruch – Notfall, nur durch Mitarbeiter'); notfall = true; }\nif (G.brand === 'vorhanden' || G.strom === 'vorhanden') { gruende.push('Brand-, Rauch- oder Stromgefahr – Notfall, nur durch Mitarbeiter'); notfall = true; }\nif (dring === 'notfall' || a.notfall === true || G.dringend === 'vorhanden' || G.versorgung === 'vorhanden') { gruende.push('Notfall oder dringend beschrieben'); notfall = true; }\nelse if (!(cfg.erlaubte_dringlichkeiten || []).includes(dring)) gruende.push('Dringlichkeit „' + dring + '“ ist nicht für automatische Termine freigegeben');\nif (G.unklar === true) gruende.push('Mögliche Gefahr sprachlich unklar – zur Sicherheit Mitarbeiterprüfung');\n\nif (anliegen.length < 15 || /KI-Analyse nicht verfügbar|keine strukturierten Anrufdaten/i.test(anliegen)) gruende.push('Anliegen unklar oder zu kurz');\n\n// Für erste Terminvorschläge sind Wunschtermin, Uhrzeit, Gerätemodell, Baujahr, Fehlercode,\n// Hersteller, Warmwasserstatus oder ein zusätzlicher Ansprechpartner nicht erforderlich.\n// Adresse, PLZ und Telefonnummer werden unten eigenständig geprüft. Blockierend sind nur\n// Angaben, ohne die der Einsatz selbst unklar bleibt (z. B. Zugang oder Problembeschreibung).\nconst BLOCKIEREND = /zugang|zutritt|schlüssel|einlass|ansprechbar vor ort|problembeschreibung|fehlerbild|was genau|welche(r|s)? (defekt|schaden|problem)|art des (problems|schadens)|unklar/i;\nconst fehlend = t(a.fehlende_informationen);\nconst offeneAngaben = /^(keine?|-|–|unbekannt|n\\/a)$/i.test(fehlend) ? [] : fehlend.split(/[,;]+/).map(s => s.trim()).filter(Boolean).filter(s => BLOCKIEREND.test(s));\nif (cfg.fehlende_angaben_blockieren && offeneAngaben.length) gruende.push('Angaben unvollständig: ' + offeneAngaben.join(', ').slice(0, 120));\n\nconst adresse = t(a.adresse);\nif (adresse.length < 5 || !/\\d/.test(adresse)) gruende.push('Adresse fehlt oder unvollständig');\nif (t(a.telefon_normalisiert || a.telefon).replace(/\\D/g, '').length < 6) gruende.push('Telefonnummer fehlt');\n\n// Ortsnamen werden vor dem Vergleich auf beiden Seiten vereinheitlicht: Umlaute und ß\n// ausgeschrieben, alles außer Buchstaben entfernt. So gilt \"Muenchen\" = \"München\",\n// während ein echter Hörfehler wie \"Mönchen\" weiterhin nicht passt.\nconst ortNorm = v => t(v).toLowerCase()\n  .replace(/ä/g, 'ae').replace(/ö/g, 'oe').replace(/ü/g, 'ue').replace(/ß/g, 'ss')\n  .replace(/[^a-z]/g, '');\nconst gebietPlz = ((cfg.einsatzgebiet || {}).plz || []).map(p => t(p)).filter(Boolean);\nconst gebietOrte = ((cfg.einsatzgebiet || {}).orte || []).map(o => ortNorm(o)).filter(Boolean);\n// Die PLZ kommt ausschließlich aus dem eigenen PLZ-Feld und wird nie aus Adresse oder Ort erraten.\nconst plzEingabe = t(a.plz);\nconst plz = /^\\d{5}$/.test(plzEingabe) ? plzEingabe : '';\nif (!plz) gruende.push(plzEingabe ? 'PLZ ungültig (nicht fünfstellig)' : 'PLZ fehlt');\nconst ort = ortNorm(a.ort);\nif (!gebietPlz.length && !gebietOrte.length) gruende.push('Einsatzgebiet nicht konfiguriert');\nelse if (plz) {\n  // Die Begründung nennt das Kriterium, das tatsächlich entschieden hat.\n  if (gebietPlz.length) {\n    if (!gebietPlz.some(p => plz.startsWith(p))) gruende.push('Außerhalb des Einsatzgebiets (PLZ ' + plz + ')');\n  } else if (!(ort && gebietOrte.includes(ort))) {\n    gruende.push('Außerhalb des Einsatzgebiets (Ort ' + (t(a.ort) || 'nicht angegeben') + ')');\n  }\n}\n\nconst vorab = (cfg.vorabpruefung_stichworte || []).filter(w => anliegenText.includes(String(w).toLowerCase()));\nif (vorab.length) gruende.push('Vorabprüfung, Sonderqualifikation oder Ersatzteile nötig (' + vorab.join(', ') + ')');\n\nconst arten = cfg.terminarten || {};\nlet art = t((gewaehlt && gewaehlt.terminart) || (verschiebung && verschiebung.alt.terminart) || a.terminart);\nif (!arten[art]) {\n  art = '';\n  const treffer = Object.keys(arten).filter(k => (arten[k].stichworte || []).some(w => anliegenText.includes(String(w).toLowerCase())));\n  const nichtAuto = treffer.filter(k => !arten[k].automatisch);\n  if (nichtAuto.length) art = nichtAuto[0];\n  else if (treffer.length) art = treffer.sort((x, y) => (Number(arten[y].dauer_minuten) || 0) - (Number(arten[x].dauer_minuten) || 0))[0];\n  else {\n    const perKategorie = Object.keys(arten).filter(k => (arten[k].kategorien || []).includes(t(a.kategorie)));\n    if (perKategorie.length === 1) art = perKategorie[0];\n  }\n}\nconst dauer = art ? Number(arten[art].dauer_minuten) : NaN;\nif (!art) gruende.push('Terminart nicht eindeutig erkennbar');\nelse if (arten[art].automatisch !== true) gruende.push('Terminart „' + (arten[art].bezeichnung || art) + '“ ist nicht zur automatischen Terminvergabe freigegeben');\nelse if (!(dauer > 0)) gruende.push('Dauer für Terminart „' + art + '“ unbekannt');\n\nif (gruende.length) {\n  const antwortAn = ['bestaetigen', 'kundenantwort', 'verschieben', 'verschieben_bestaetigen', 'direkt_buchen'].includes(aktion) && !notfall;\n  return [{ json: { weiter: 'mitarbeiter', mitarbeiter: {\n    aufgabe_anlegen: Boolean(verschiebung),\n    titel: verschiebung ? 'Verschiebungswunsch – bitte persönlich abstimmen' : undefined,\n    termin_status: verschiebung ? null : (anfrageOk ? 'mitarbeiterpruefung' : null),\n    termin_id: verschiebung ? verschiebung.alt.id : undefined,\n    notfall,\n    gruende,\n    kunden_nachricht: antwortAn ? (verschiebung ? 'Vielen Dank für Ihre Nachricht. Ihr bisheriger Termin bleibt bestehen; unser Serviceteam stimmt die Verschiebung persönlich mit Ihnen ab.' : TEXT_PERSOENLICH) : ''\n  } } }];\n}\nreturn [{ json: { weiter: 'belegung_lesen', terminart: art, terminart_bezeichnung: arten[art].bezeichnung || art, dauer_minuten: dauer } }];\n"
+      },
+      "id": "018566a1-03c1-466d-8de1-c4fcfb6f64cb",
+      "name": "Eignung prüfen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        -240
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Terminkonfiguration').first().json.supabase_url }}/rest/v1/termine",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "select",
+              "value": "id,anfrage_db_id,status,start_at,ende_at,belegt_von,belegt_bis,updated_at,externe_event_id"
+            },
+            {
+              "name": "betrieb_id",
+              "value": "={{ 'eq.' + $('Terminkonfiguration').first().json.betrieb_id }}"
+            },
+            {
+              "name": "ressource_id",
+              "value": "={{ 'eq.' + $('Terminkonfiguration').first().json.cfg.kalender.ressource_id }}"
+            },
+            {
+              "name": "status",
+              "value": "in.(reserviert,gebucht)"
+            },
+            {
+              "name": "belegt_bis",
+              "value": "={{ 'gt.' + $('Terminkonfiguration').first().json.zeitraum.von_utc }}"
+            },
+            {
+              "name": "belegt_von",
+              "value": "={{ 'lt.' + $('Terminkonfiguration').first().json.zeitraum.bis_utc }}"
+            },
+            {
+              "name": "order",
+              "value": "start_at.asc"
+            },
+            {
+              "name": "limit",
+              "value": "1000"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "f72cac31-bbf5-4730-bdfc-7b90487aaad0",
+      "name": "Belegte Termine lesen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        144
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "k-0",
+                    "leftValue": "={{ $('Terminkonfiguration').first().json.cfg.kalender.anbieter }}",
+                    "rightValue": "test",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "test"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "k-1",
+                    "leftValue": "={{ $('Terminkonfiguration').first().json.cfg.kalender.anbieter }}",
+                    "rightValue": "outlook",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "outlook"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8c334104-2732-4ba6-9f44-bd542568285c",
+      "name": "Kalenderanbieter wählen",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        896,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Austauschbarer Test-Kalender: liefert Belegungen aus den Testdaten, nie aus einem echten Kalender.\nconst K = $('Terminkonfiguration').first().json;\nconst t = K.test || {};\nif (t.kalender_fehler) return [{ json: { quelle: 'testkalender', fehler: 'Testkalender nicht erreichbar (simuliert)' } }];\nreturn [{ json: { quelle: 'testkalender', belegt: Array.isArray(t.kalender_belegt) ? t.kalender_belegt : [] } }];\n"
+      },
+      "id": "87f137fd-d807-4a04-bb66-140b3d30ff83",
+      "name": "Testkalender lesen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        -112
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://graph.microsoft.com/v1.0/users/' + encodeURIComponent($('Terminkonfiguration').first().json.cfg.kalender.outlook.postfach) + ($('Terminkonfiguration').first().json.cfg.kalender.outlook.kalender_id ? '/calendars/' + encodeURIComponent($('Terminkonfiguration').first().json.cfg.kalender.outlook.kalender_id) : '/calendar') + '/calendarView' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOutlookOAuth2Api",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "startDateTime",
+              "value": "={{ $('Terminkonfiguration').first().json.zeitraum.von_utc }}"
+            },
+            {
+              "name": "endDateTime",
+              "value": "={{ $('Terminkonfiguration').first().json.zeitraum.bis_utc }}"
+            },
+            {
+              "name": "$top",
+              "value": "500"
+            },
+            {
+              "name": "$select",
+              "value": "start,end,showAs,isCancelled"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "outlook.timezone=\"UTC\""
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d8b07e7d-f6fc-4eb1-b294-a0e24d593213",
+      "name": "Outlook-Kalender lesen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1120,
+        192
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "disabled": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const K = $('Terminkonfiguration').first().json;\nconst cfg = K.cfg;\nconst utc = s => DateTime.fromISO(String(s), { zone: 'utc' });\nconst ok2xx = r => r && r.statusCode >= 200 && r.statusCode < 300;\n\nconst db = $('Belegte Termine lesen').first().json;\nif (!ok2xx(db) || !Array.isArray(db.body)) throw new Error('Belegte Termine konnten nicht gelesen werden');\nconst x = $input.first().json;\nlet belegt;\nif (cfg.kalender.anbieter === 'test') {\n  if (x.quelle !== 'testkalender') throw new Error('Testkalender lieferte keine Daten');\n  if (x.fehler) throw new Error(x.fehler);\n  belegt = x.belegt;\n} else {\n  if (!Array.isArray(x.value)) throw new Error('Outlook-Kalender nicht erreichbar oder nicht eingerichtet');\n  if (x['@odata.nextLink']) throw new Error('Outlook-Kalender: Ergebnis unvollständig');\n  belegt = x.value.filter(ev => !ev.isCancelled && ev.showAs !== 'free').map(ev => ({ von_utc: ev.start && ev.start.dateTime, bis_utc: ev.end && ev.end.dateTime, quelle: 'outlook' }));\n}\nconst kalender_belegt = (belegt || []).map((b, i) => {\n  const von = utc(b.von_utc); const bis = utc(b.bis_utc);\n  if (!von.isValid || !bis.isValid || bis <= von) throw new Error('Kalendereintrag ' + i + ' ungültig');\n  return { von_utc: von.toISO(), bis_utc: bis.toISO(), quelle: b.quelle || 'kalender' };\n});\nreturn [{ json: { kalender_belegt, db_belegt: db.body } }];\n"
+      },
+      "id": "dac0411f-b056-4537-8bad-728fa418d0b1",
+      "name": "Kalenderbelegung prüfen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        32
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const K = $('Terminkonfiguration').first().json;\nconst cfg = K.cfg;\nconst tz = cfg.zeitzone;\nconst a = K.anfrage || {};\nconst UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\nconst anfrageOk = UUID.test(String(a.anfrage_db_id || ''));\nconst utc = s => DateTime.fromISO(String(s), { zone: 'utc' });\nconst anzeige = s => utc(s).setZone(tz).setLocale('de').toFormat(\"cccc, dd.MM.yyyy 'um' HH:mm 'Uhr'\");\nconst A = (ergebnis, x) => Object.assign({ ergebnis, termin_status: null, mitarbeiter_noetig: false, notfall: false, kunden_nachricht: '', gruende: [], vorschlaege: [], termin: null }, x || {});\nconst TEXT_PERSOENLICH = 'Vielen Dank für Ihre Rückmeldung. Ihren Termin stimmt unser Serviceteam persönlich mit Ihnen ab.';\n\n// Freie Termine berechnen bzw. gewählten Termin unmittelbar vor Buchung oder Verschiebung erneut prüfen.\nconst E = $('Eignung prüfen').first().json;\nconst W = $('Terminwahl erkennen').isExecuted ? $('Terminwahl erkennen').first().json : null;\nconst aktion = W && W.aktion ? W.aktion : K.aktion;\nconst alt = W && W.verschiebung ? W.verschiebung.alt : null;\nconst B = $input.first().json;\nconst jetzt = utc(K.jetzt_utc);\nconst pv = Number(cfg.puffer_vor_minuten), pn = Number(cfg.puffer_nach_minuten);\nconst dauer = Number(E.dauer_minuten);\nconst raster = Number(cfg.raster_minuten);\nconst fruehest = jetzt.plus({ hours: Number(cfg.fruehester_termin_stunden) });\nconst horizontEnde = jetzt.setZone(tz).startOf('day').plus({ days: Number(cfg.horizont_tage) + 1 });\nconst ms = s => utc(s).toMillis();\nconst idem = start => ['termin', K.betrieb_id, a.anfrage_db_id, cfg.kalender.ressource_id, start.toISO()].join('|');\n\nlet gewaehlt = W && W.gewaehlt ? Object.assign({}, W.gewaehlt) : null;\nif (W && W.direkt && gewaehlt) {\n  const start = utc(gewaehlt.start_at);\n  gewaehlt = { id: null, start_at: start.toISO(), ende_at: start.plus({ minutes: dauer }).toISO(), ressource_id: cfg.kalender.ressource_id, terminart: E.terminart, idempotenz_id: idem(start) };\n}\nconst zweck = gewaehlt ? 'pruefen' : 'vorschlagen';\n\n// Eigene Buchung (bei Verschiebung) und gewählter Vorschlag blockieren nicht; der eigene Kalendereintrag ebenso nicht.\nconst ohne = new Set([gewaehlt && gewaehlt.id, alt && alt.id].filter(Boolean));\nconst altStart = alt ? ms(alt.start_at) : null, altEnde = alt ? ms(alt.ende_at) : null;\nconst kalender = B.kalender_belegt.map(b => [ms(b.von_utc), ms(b.bis_utc)]).filter(([k1, k2]) => !(alt && k1 === altStart && k2 === altEnde));\nconst db = B.db_belegt.filter(r => !ohne.has(r.id)).map(r => ({ von: ms(r.belegt_von), bis: ms(r.belegt_bis), start: ms(r.start_at) }));\nconst ueberlappt = (a1, a2, b1, b2) => a1 < b2 && b1 < a2;\nconst hm = (tag, s) => { const [h, m] = String(s).split(':').map(Number); return tag.set({ hour: h, minute: m, second: 0, millisecond: 0 }); };\nconst lokalerTag = x => DateTime.fromMillis(x, { zone: tz }).toISODate();\nconst tageslast = tag => db.filter(r => lokalerTag(r.start) === tag).length\n  + kalender.filter(([k1, k2]) => lokalerTag(k1) === tag && !db.some(r => ueberlappt(k1, k2, r.von, r.bis))).length;\n\nconst regeln = (start, ende) => {\n  const v = [];\n  const s = start.setZone(tz), e = ende.setZone(tz);\n  if (start < fruehest) v.push('früher als der früheste mögliche Termin');\n  if (start >= horizontEnde) v.push('außerhalb des Planungshorizonts');\n  if (s.toISODate() !== e.minus({ milliseconds: 1 }).toISODate()) v.push('geht über die Tagesgrenze');\n  if ((cfg.gesperrte_tage || []).includes(s.toISODate())) v.push('gesperrter Tag');\n  const fenster = (cfg.oeffnungszeiten || []).filter(f => (f.tage || []).includes(s.weekday));\n  if (!fenster.length) v.push('kein Arbeitstag');\n  else if (!fenster.some(f => s >= hm(s, f.von) && e <= hm(s, f.bis))) v.push('außerhalb der Geschäftszeiten');\n  if ((cfg.pausen || []).some(p => ueberlappt(s.toMillis(), e.toMillis(), hm(s, p.von).toMillis(), hm(s, p.bis).toMillis()))) v.push('überschneidet eine Pause');\n  const bv = start.minus({ minutes: pv }).toMillis(), bb = ende.plus({ minutes: pn }).toMillis();\n  if ((cfg.gesperrte_zeitraeume || []).some(z => ueberlappt(bv, bb, DateTime.fromISO(String(z.von), { zone: tz }).toMillis(), DateTime.fromISO(String(z.bis), { zone: tz }).toMillis()))) v.push('gesperrter Zeitraum');\n  if (kalender.some(([k1, k2]) => ueberlappt(bv, bb, k1, k2))) v.push('Kalender belegt');\n  if (db.some(r => ueberlappt(bv, bb, r.von, r.bis))) v.push('bereits anderer Termin reserviert/gebucht');\n  if (tageslast(s.toISODate()) >= Number(cfg.max_termine_pro_tag)) v.push('Tageskapazität erreicht');\n  return v;\n};\nconst imRaster = start => {\n  const s = start.setZone(tz);\n  return (cfg.oeffnungszeiten || []).some(f => (f.tage || []).includes(s.weekday) && s >= hm(s, f.von) && Math.round(s.diff(hm(s, f.von), 'minutes').minutes) % raster === 0);\n};\n// Spätere Vorschlagsrunde: erst ab dem Tag nach dem spätesten abgelehnten Vorschlag suchen.\nconst abgelehntTel = aktion === 'verfuegbarkeit' && Array.isArray(K.wunsch.abgelehnte_termine_utc)\n  ? K.wunsch.abgelehnte_termine_utc.slice(0, 30).map(s => utc(s)).filter(d => d.isValid) : [];\nconst abQuelle = [W && W.ab_utc ? utc(W.ab_utc) : null].concat(abgelehntTel).filter(d => d && d.isValid);\nconst abTag = abQuelle.length ? DateTime.max(...abQuelle).setZone(tz).startOf('day').plus({ days: 1 }) : null;\nconst TEXT_ZEITRAUM = 'Schade, dass keiner der angebotenen Termine passt. Welcher Zeitraum passt Ihnen am besten (zum Beispiel Wochentage und Uhrzeiten)? Unser Serviceteam meldet sich dann persönlich mit einem passenden Termin.';\nconst berechne = aus => {\n  const liste = [];\n  for (let tag = jetzt.setZone(tz).startOf('day'), i = 0; i <= Number(cfg.horizont_tage) && liste.length < cfg.anzahl_vorschlaege; i++, tag = tag.plus({ days: 1 })) {\n    if (abTag && tag < abTag) continue;\n    const fenster = (cfg.oeffnungszeiten || []).filter(f => (f.tage || []).includes(tag.weekday));\n    for (const f of fenster) {\n      for (let s = hm(tag, f.von); s.plus({ minutes: dauer }) <= hm(tag, f.bis) && liste.length < cfg.anzahl_vorschlaege; s = s.plus({ minutes: raster })) {\n        const start = s.toUTC(), ende = s.plus({ minutes: dauer }).toUTC();\n        if (aus.has(start.toISO())) continue;\n        if (liste.some(l => ueberlappt(start.minus({ minutes: pv }).toMillis(), ende.plus({ minutes: pn }).toMillis(), l.start.minus({ minutes: pv }).toMillis(), l.ende.plus({ minutes: pn }).toMillis()))) continue;\n        if (regeln(start, ende).length) continue;\n        liste.push({ start, ende });\n        if (cfg.ein_vorschlag_pro_tag) break;\n      }\n      if (cfg.ein_vorschlag_pro_tag && liste.some(l => l.start.setZone(tz).toISODate() === tag.toISODate())) break;\n    }\n  }\n  return liste;\n};\nconst alsVorschlaege = liste => liste.map((x, i) => ({ nummer: i + 1, start_utc: x.start.toISO(), ende_utc: x.ende.toISO(), anzeige: anzeige(x.start.toISO()) }));\nconst keineTermine = (hinweisText) => [{ json: { weiter: 'mitarbeiter', mitarbeiter: {\n  aufgabe_anlegen: anfrageOk,\n  titel: 'Kein freier Termin im Planungshorizont – bitte manuell planen',\n  beschreibung: 'Terminart: ' + E.terminart_bezeichnung + ', Dauer ' + dauer + ' Min., Horizont ' + cfg.horizont_tage + ' Tage.' + (alt ? ' Verschiebungswunsch, bisheriger Termin bleibt: ' + anzeige(alt.start_at) + '.' : ''),\n  prioritaet: 'normal',\n  termin_status: alt ? null : 'mitarbeiterpruefung',\n  termin_id: alt ? alt.id : undefined,\n  gruende: ['Keine freien Termine in den nächsten ' + cfg.horizont_tage + ' Tagen'],\n  kunden_nachricht: ['bestaetigen', 'kundenantwort', 'verschieben', 'verschieben_bestaetigen', 'direkt_buchen'].includes(aktion) ? (hinweisText ? hinweisText + ' ' : '') + (alt ? 'Ihr bisheriger Termin bleibt bestehen. ' : '') + TEXT_PERSOENLICH : ''\n} } }];\n\nconst ausschliessen = new Set(((W && W.ausschliessen) || []).map(x => utc(x).toISO()));\nif (alt) ausschliessen.add(utc(alt.start_at).toISO());\nlet hinweis = (W && W.hinweis) || '';\nlet pruefung = null;\n\nif (aktion === 'verfuegbarkeit') {\n  // Telefon: bereits genannte und abgelehnte Termine nie erneut anbieten; nach den erlaubten Runden Wunschzeitraum erfragen.\n  abgelehntTel.forEach(d => ausschliessen.add(d.toISO()));\n  const runden = Math.ceil(abgelehntTel.length / Number(cfg.anzahl_vorschlaege));\n  if (runden >= Number(cfg.max_vorschlagsrunden)) {\n    return [{ json: { weiter: 'antwort', antwort: A('zeitraum_erfragen', { mitarbeiter_noetig: true, gruende: [runden + ' Vorschlagsrunden ohne passenden Termin'], kunden_nachricht: TEXT_ZEITRAUM }) } }];\n  }\n  const liste = berechne(ausschliessen);\n  if (!liste.length) return keineTermine('');\n  const vorschlaege = alsVorschlaege(liste);\n  return [{ json: { weiter: 'antwort', antwort: A('verfuegbar', { vorschlaege, kunden_nachricht: 'Freie Termine für ' + E.terminart_bezeichnung + ': ' + vorschlaege.map(v => v.nummer + ') ' + v.anzeige).join('; ') + '.' }) } }];\n}\n\nif (zweck === 'pruefen') {\n  const start = utc(gewaehlt.start_at), ende = utc(gewaehlt.ende_at);\n  const verstoesse = regeln(start, ende);\n  if (gewaehlt.ressource_id !== cfg.kalender.ressource_id) verstoesse.push('Ressource geändert');\n  if (W && W.direkt && !imRaster(start)) verstoesse.push('kein angebotener Terminbeginn');\n  if (!verstoesse.length) {\n    if (cfg.modus === 'automatisch_buchen') {\n      if (W && W.direkt) {\n        return [{ json: { weiter: 'direkt_reservieren', gewaehlt, datensatz: {\n          betrieb_id: K.betrieb_id, anfrage_db_id: a.anfrage_db_id, terminart: E.terminart, ressource_id: cfg.kalender.ressource_id,\n          kalender_anbieter: cfg.kalender.anbieter, status: 'reserviert', kunden_bestaetigung: 'bestaetigt',\n          start_at: start.toISO(), ende_at: ende.toISO(), puffer_vor_minuten: pv, puffer_nach_minuten: pn,\n          belegt_von: start.minus({ minutes: pv }).toISO(), belegt_bis: ende.plus({ minutes: pn }).toISO(), zeitzone: tz,\n          vorschlag_gruppe: 'TEL-' + $execution.id, vorschlag_nummer: 1, idempotenz_id: gewaehlt.idempotenz_id, bestaetigt_at: DateTime.utc().toISO()\n        } } }];\n      }\n      if (alt) {\n        const neu = {\n          start_at: start.toISO(), ende_at: ende.toISO(), belegt_von: start.minus({ minutes: pv }).toISO(), belegt_bis: ende.plus({ minutes: pn }).toISO(),\n          puffer_vor_minuten: pv, puffer_nach_minuten: pn, idempotenz_id: idem(start), vorschlag_gruppe: gewaehlt.vorschlag_gruppe, vorschlag_nummer: gewaehlt.vorschlag_nummer\n        };\n        return [{ json: { weiter: 'kalender_aktion', kalender: {\n          op: 'anlegen',\n          termin: { id: alt.id, terminart: alt.terminart, start_at: neu.start_at, ende_at: neu.ende_at },\n          bei_erfolg: { weiter: 'verschieben_db', verschiebung: { alt, neu } },\n          bei_fehler: { weiter: 'mitarbeiter', mitarbeiter: {\n            aufgabe_anlegen: true, titel: 'Verschiebung nicht durchgeführt – Kalender nicht erreichbar',\n            beschreibung: 'Gewünschter neuer Termin: ' + anzeige(neu.start_at) + '. Bisheriger Termin bleibt bestehen: ' + anzeige(alt.start_at) + '.',\n            prioritaet: 'hoch', termin_status: 'gebucht', termin_id: alt.id, gruende: ['Kalender nicht erreichbar'],\n            kunden_nachricht: 'Vielen Dank für Ihre Rückmeldung. Ihr bisheriger Termin am ' + anzeige(alt.start_at) + ' bleibt bestehen. Die Verschiebung konnte gerade nicht automatisch durchgeführt werden; unser Serviceteam meldet sich persönlich.'\n          } }\n        } } }];\n      }\n      return [{ json: { weiter: 'reservieren', gewaehlt, pruefung: 'frei' } }];\n    }\n    return [{ json: { weiter: 'mitarbeiter', mitarbeiter: {\n      aufgabe_anlegen: true,\n      titel: (alt ? 'Kunde möchte Termin verschieben' : 'Kunde hat Termin bestätigt') + ' – bitte buchen (' + anzeige(gewaehlt.start_at) + ')',\n      beschreibung: 'Modus „vorschlagen“: Termin ist laut erneuter Prüfung frei, Buchung durch Mitarbeiter.' + (alt ? ' Bisheriger Termin: ' + anzeige(alt.start_at) + '.' : ''),\n      prioritaet: 'normal',\n      termin_status: alt ? 'gebucht' : 'kundenbestaetigt',\n      termin_id: alt ? alt.id : (gewaehlt.id || undefined),\n      gruende: ['Automatische Buchung nicht aktiviert (Modus „vorschlagen“)'],\n      kunden_nachricht: 'Vielen Dank! Ihr Terminwunsch (' + anzeige(gewaehlt.start_at) + ') ist bei uns eingegangen. Unser Serviceteam bestätigt den Termin persönlich.' + (alt ? ' Ihr bisheriger Termin bleibt bis dahin bestehen.' : '')\n    } } }];\n  }\n  pruefung = verstoesse;\n  ausschliessen.add(start.toISO());\n  hinweis = 'Der gewählte Termin (' + anzeige(gewaehlt.start_at) + ') ist leider nicht verfügbar.';\n}\n\nconst liste = berechne(ausschliessen);\nif (W && W.direkt) {\n  if (!liste.length) return keineTermine(hinweis);\n  const vorschlaege = alsVorschlaege(liste);\n  return [{ json: { weiter: 'antwort', antwort: A('nicht_verfuegbar', { vorschlaege, gruende: pruefung || [], kunden_nachricht: hinweis + ' Alternativ frei: ' + vorschlaege.map(v => v.nummer + ') ' + v.anzeige).join('; ') + '.' }) } }];\n}\nif (!liste.length) return keineTermine(hinweis);\n\nconst gruppe = (alt ? 'VS-' : 'VG-') + $execution.id + '-' + Date.now();\nconst gueltigBis = jetzt.plus({ hours: Number(cfg.vorschlag_gueltig_stunden) });\nconst vorschlaege = alsVorschlaege(liste);\nconst datensaetze = liste.map((x, i) => ({\n  betrieb_id: K.betrieb_id,\n  anfrage_db_id: a.anfrage_db_id,\n  terminart: E.terminart,\n  ressource_id: cfg.kalender.ressource_id,\n  kalender_anbieter: cfg.kalender.anbieter,\n  status: 'vorgeschlagen',\n  kunden_bestaetigung: 'offen',\n  start_at: x.start.toISO(),\n  ende_at: x.ende.toISO(),\n  puffer_vor_minuten: pv,\n  puffer_nach_minuten: pn,\n  belegt_von: x.start.minus({ minutes: pv }).toISO(),\n  belegt_bis: x.ende.plus({ minutes: pn }).toISO(),\n  zeitzone: tz,\n  vorschlag_gruppe: gruppe,\n  vorschlag_nummer: i + 1,\n  gueltig_bis: gueltigBis.toISO()\n}));\nconst nachricht = (hinweis ? hinweis + ' ' : '')\n  + (alt ? 'Ihr bisheriger Termin am ' + anzeige(alt.start_at) + ' bleibt bestehen, bis Sie einen neuen Termin bestätigt haben. ' : '')\n  + 'Für ' + E.terminart_bezeichnung + ' können wir Ihnen folgende Termine anbieten:\\n'\n  + vorschlaege.map(v => v.nummer + ') ' + v.anzeige).join('\\n')\n  + '\\nBitte antworten Sie mit der Nummer Ihres Wunschtermins. Wenn keiner passt, antworten Sie mit „keiner“. '\n  + 'Die Vorschläge gelten bis ' + gueltigBis.setZone(tz).setLocale('de').toFormat(\"dd.MM.yyyy HH:mm 'Uhr'\") + ' und werden erst mit unserer Bestätigung verbindlich.';\n\nif (cfg.modus === 'test') {\n  return [{ json: { weiter: 'antwort', antwort: A('testmodus', { vorschlaege, vorschau_nachricht: nachricht, gruende: ['Testmodus: nichts gespeichert, keine Nachricht freigegeben'] }) } }];\n}\nreturn [{ json: { weiter: 'vorschlaege_speichern', zweck, pruefung, verschiebung: Boolean(alt), datensaetze, vorschlaege, nachricht } }];\n"
+      },
+      "id": "e51d3e25-c8b1-44b9-8bea-6f9f26c4ce4e",
+      "name": "Termine berechnen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        -48
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Terminkonfiguration').first().json.supabase_url }}/rest/v1/termine",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "select",
+              "value": "*"
+            },
+            {
+              "name": "betrieb_id",
+              "value": "={{ 'eq.' + $('Terminkonfiguration').first().json.betrieb_id }}"
+            },
+            {
+              "name": "anfrage_db_id",
+              "value": "={{ 'eq.' + $('Terminkonfiguration').first().json.anfrage.anfrage_db_id }}"
+            },
+            {
+              "name": "order",
+              "value": "created_at.desc"
+            },
+            {
+              "name": "limit",
+              "value": "50"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "969fd9c6-17fd-48bc-ab76-e4a7e7486f8b",
+      "name": "Termine zur Anfrage lesen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        528
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const K = $('Terminkonfiguration').first().json;\nconst cfg = K.cfg;\nconst tz = cfg.zeitzone;\nconst a = K.anfrage || {};\nconst utc = s => DateTime.fromISO(String(s), { zone: 'utc' });\nconst anzeige = s => utc(s).setZone(tz).setLocale('de').toFormat(\"cccc, dd.MM.yyyy 'um' HH:mm 'Uhr'\");\nconst terminInfo = z => ({ termin_id: z.id, start_utc: utc(z.start_at).toISO(), ende_utc: utc(z.ende_at).toISO(), anzeige: anzeige(z.start_at), terminart: z.terminart, status: z.status });\nconst A = (ergebnis, x) => Object.assign({ ergebnis, termin_status: null, mitarbeiter_noetig: false, notfall: false, kunden_nachricht: '', gruende: [], vorschlaege: [], termin: null }, x || {});\nconst TEXT_PERSOENLICH = 'Vielen Dank für Ihre Rückmeldung. Ihren Termin stimmt unser Serviceteam persönlich mit Ihnen ab.';\nconst ok2xx = r => r && r.statusCode >= 200 && r.statusCode < 300;\n\n// Termine der Anfrage lesen und den Kundenwunsch bestimmen: Auswahl, Ablehnung, Anzeige, Verschiebung, Storno.\nconst r = $input.first().json;\nif (!ok2xx(r) || !Array.isArray(r.body)) throw new Error('Termine zur Anfrage konnten nicht gelesen werden');\nconst zeilen = r.body;\nif (zeilen.some(z => z.betrieb_id !== K.betrieb_id || z.anfrage_db_id !== a.anfrage_db_id)) throw new Error('Termindaten gehören nicht zu Betrieb/Anfrage');\nconst jetzt = utc(K.jetzt_utc);\nconst text = K.kunden_nachricht.toLowerCase();\nconst aus = obj => [{ json: obj }];\nconst bezeichnung = z => ((cfg.terminarten || {})[z.terminart] || {}).bezeichnung || z.terminart;\nconst gebucht = zeilen.find(z => z.status === 'gebucht');\nconst reserviert = zeilen.find(z => z.status === 'reserviert');\nconst neuesteGruppe = liste => {\n  const n = liste.reduce((m, z) => (!m || utc(z.created_at) > utc(m.created_at) ? z : m), null);\n  return n ? liste.filter(z => z.vorschlag_gruppe === n.vorschlag_gruppe).sort((x, y) => x.vorschlag_nummer - y.vorschlag_nummer) : [];\n};\nconst offen = zeilen.filter(z => z.status === 'vorgeschlagen' && z.vorschlag_gruppe);\nconst gruppeVon = z => String(z.vorschlag_gruppe);\nconst normaleAngebote = neuesteGruppe(offen.filter(z => !gruppeVon(z).startsWith('VS-') && !gruppeVon(z).startsWith('TEL-')));\nconst vsAngebote = gebucht ? neuesteGruppe(offen.filter(z => gruppeVon(z).startsWith('VS-') && utc(z.created_at) > utc(gebucht.gebucht_at || gebucht.updated_at))) : [];\n// Vom Kunden ausdrücklich abgelehnte Vorschlagsrunden (normale Vorschläge bzw. Verschiebungsvorschläge)\nconst abgelehnt = zeilen.filter(z => z.status === 'abgelehnt' && z.vorschlag_gruppe);\nconst abgelehntNormal = abgelehnt.filter(z => !gruppeVon(z).startsWith('VS-') && !gruppeVon(z).startsWith('TEL-'));\nconst abgelehntVS = gebucht ? abgelehnt.filter(z => gruppeVon(z).startsWith('VS-') && utc(z.created_at) > utc(gebucht.gebucht_at || gebucht.updated_at)) : [];\nconst rundenAnzahl = zeilenListe => new Set(zeilenListe.map(gruppeVon)).size;\nconst MAX_RUNDEN = Number(cfg.max_vorschlagsrunden);\nconst TEXT_ZEITRAUM = 'Schade, dass keiner der angebotenen Termine passt. Welcher Zeitraum passt Ihnen am besten (zum Beispiel Wochentage und Uhrzeiten)? Unser Serviceteam meldet sich dann persönlich mit einem passenden Termin.';\nconst liste = ang => ang.map(z => z.vorschlag_nummer + ') ' + anzeige(z.start_at)).join('\\n');\nconst vorschlagInfo = ang => ang.map(z => ({ nummer: z.vorschlag_nummer, termin_id: z.id, start_utc: utc(z.start_at).toISO(), ende_utc: utc(z.ende_at).toISO(), anzeige: anzeige(z.start_at) }));\n\nlet aktion = K.aktion;\nconst STORNO = /stornier|storno|\\babsagen\\b|\\bsage\\b.{0,25}\\bab\\b|termin\\s+(bitte\\s+)?(löschen|loeschen|streichen|canceln)|\\bcancel/;\nconst NEGATION = /(nicht|kein|keinen)\\s+(\\S+\\s+){0,3}(stornier|absagen|storno)/;\nconst VERSCHIEBEN = /verschieb|verlegen|umlegen|anderen\\s+termin|neuen\\s+termin|termin\\s+(ändern|aendern|tauschen)/;\nconst ANZEIGEN = /wann\\s+(ist|war|kommt|kommen)|welche[rnms]?\\s+termin|termin\\s+(nochmal|noch\\s*mal|erneut|anzeigen)|uhrzeit\\s+(nochmal|noch\\s*mal)|an\\s+welchem\\s+tag/;\nif (aktion === 'kundenantwort') {\n  if (gebucht && STORNO.test(text) && !NEGATION.test(text)) aktion = 'stornieren';\n  else if (gebucht && VERSCHIEBEN.test(text)) aktion = 'verschieben';\n  else if (ANZEIGEN.test(text)) aktion = 'anzeigen';\n  else if (gebucht && vsAngebote.length) aktion = 'verschieben_bestaetigen';\n  else aktion = 'bestaetigen';\n}\n\nif (aktion === 'anzeigen') {\n  if (gebucht) return aus({ aktion, weiter: 'antwort', antwort: A('termin_angezeigt', { termin_status: 'gebucht', termin: terminInfo(gebucht), kunden_nachricht: 'Ihr gebuchter Termin: ' + anzeige(gebucht.start_at) + ' (' + bezeichnung(gebucht) + ').' }) });\n  if (reserviert) return aus({ aktion, weiter: 'antwort', antwort: A('in_bearbeitung', { termin_status: 'kundenbestaetigt', termin: terminInfo(reserviert), kunden_nachricht: 'Ihre Terminbestätigung wird gerade verarbeitet.' }) });\n  if (normaleAngebote.length) return aus({ aktion, weiter: 'antwort', antwort: A('vorschlaege_angezeigt', { termin_status: 'vorgeschlagen', vorschlaege: vorschlagInfo(normaleAngebote), kunden_nachricht: 'Ihre offenen Terminvorschläge:\\n' + liste(normaleAngebote) + '\\nBitte antworten Sie mit der Nummer Ihres Wunschtermins.' }) });\n  return aus({ aktion, weiter: 'antwort', antwort: A('kein_termin', { kunden_nachricht: 'Zu Ihrer Anfrage ist aktuell kein Termin gebucht. Unser Serviceteam meldet sich zur Terminabstimmung.' }) });\n}\n\nif (reserviert) {\n  const haengt = jetzt.diff(utc(reserviert.updated_at || reserviert.created_at), 'minutes').minutes > Number(cfg.reservierung_ablauf_minuten);\n  if (haengt) return aus({ aktion, weiter: 'mitarbeiter', mitarbeiter: { aufgabe_anlegen: true, titel: 'Reservierung ohne Buchung – bitte prüfen', beschreibung: 'Termin ' + reserviert.id + ' ist seit über ' + cfg.reservierung_ablauf_minuten + ' Minuten reserviert, aber nicht gebucht.', prioritaet: 'hoch', termin_status: 'mitarbeiterpruefung', termin_id: reserviert.id, gruende: ['Hängende Reservierung'], kunden_nachricht: TEXT_PERSOENLICH } });\n  return aus({ aktion, weiter: 'antwort', antwort: A('in_bearbeitung', { termin_status: 'kundenbestaetigt', termin: terminInfo(reserviert), gruende: ['Bestätigung wird bereits verarbeitet – keine zweite Buchung'] }) });\n}\nif (['stornieren', 'verschieben', 'verschieben_bestaetigen'].includes(aktion) && !gebucht) {\n  return aus({ aktion, weiter: 'antwort', antwort: A('kein_termin', { kunden_nachricht: 'Zu Ihrer Anfrage ist aktuell kein gebuchter Termin vorhanden.' }) });\n}\nif (gebucht && ['vorschlagen', 'bestaetigen', 'direkt_buchen'].includes(aktion)) {\n  return aus({ aktion, weiter: 'antwort', antwort: A('bereits_gebucht', { termin_status: 'gebucht', termin: terminInfo(gebucht),\n    kunden_nachricht: 'Ihr Termin am ' + anzeige(gebucht.start_at) + ' ist bereits verbindlich gebucht. Eine weitere Bestätigung ist nicht nötig.' }) });\n}\nif (aktion === 'vorschlagen') return aus({ aktion, weiter: 'eignung_pruefen', ausschliessen: [], hinweis: '' });\nif (cfg.modus === 'test') {\n  return aus({ aktion, weiter: 'antwort', antwort: A('testmodus', { gruende: ['Testmodus: Buchungen und Terminänderungen werden nicht verarbeitet'] }) });\n}\nif (aktion === 'direkt_buchen') {\n  return aus({ aktion, weiter: 'eignung_pruefen', direkt: true, gewaehlt: { start_at: utc(K.wunsch.start_utc).toISO() }, ausschliessen: [], hinweis: '' });\n}\nif (aktion === 'stornieren') {\n  const storno = { weiter: 'storno_db', termin: gebucht };\n  const fehler = { weiter: 'mitarbeiter', mitarbeiter: {\n    aufgabe_anlegen: true, titel: 'Stornierungswunsch – Kalendereintrag konnte nicht gelöscht werden',\n    beschreibung: 'Termin ' + anzeige(gebucht.start_at) + ' ist weiterhin gebucht.', prioritaet: 'hoch', termin_status: 'gebucht', termin_id: gebucht.id,\n    gruende: ['Kalender nicht erreichbar'],\n    kunden_nachricht: 'Vielen Dank, Ihr Stornierungswunsch ist eingegangen. Ihr Termin konnte gerade nicht automatisch storniert werden; unser Serviceteam meldet sich persönlich bei Ihnen.'\n  } };\n  if (!gebucht.externe_event_id) return aus(Object.assign({ aktion, storno_termin: gebucht }, storno));\n  return aus({ aktion, storno_termin: gebucht, weiter: 'kalender_aktion', kalender: { op: 'loeschen', event_id: gebucht.externe_event_id, termin: gebucht, bei_erfolg: storno, bei_fehler: fehler } });\n}\nif (aktion === 'verschieben') return aus({ aktion, weiter: 'eignung_pruefen', verschiebung: { alt: gebucht }, ausschliessen: [], hinweis: '' });\n\n// bestaetigen oder verschieben_bestaetigen: gewählten Vorschlag erkennen\nconst verschiebung = aktion === 'verschieben_bestaetigen' ? { alt: gebucht } : undefined;\nconst angebote = verschiebung ? vsAngebote : normaleAngebote;\nconst bisherAbgelehnt = verschiebung ? abgelehntVS : abgelehntNormal;\nif (!angebote.length && rundenAnzahl(bisherAbgelehnt) >= MAX_RUNDEN) {\n  // Vorschlagsrunden ausgeschöpft: keine weiteren automatischen Termine, Rückmeldung an das Serviceteam.\n  return aus({ aktion, weiter: 'mitarbeiter', mitarbeiter: { ergebnis: 'zeitraum_uebermittelt', aufgabe_anlegen: true,\n    titel: 'Kunde hat Wunschzeitraum genannt – Termin bitte persönlich abstimmen',\n    beschreibung: 'Nach ' + rundenAnzahl(bisherAbgelehnt) + ' abgelehnten Vorschlagsrunden. Rückmeldung des Kunden: „' + K.kunden_nachricht.slice(0, 300) + '“',\n    prioritaet: 'normal', termin_status: verschiebung ? 'gebucht' : 'mitarbeiterpruefung', termin_id: verschiebung ? gebucht.id : undefined,\n    gruende: ['Vorschlagsrunden ausgeschöpft'],\n    kunden_nachricht: 'Vielen Dank für Ihre Rückmeldung. Wir haben Ihren Wunsch an unser Serviceteam weitergegeben; es meldet sich persönlich mit einem passenden Termin.' + (verschiebung ? ' Ihr bisheriger Termin bleibt bis dahin bestehen.' : '') } });\n}\nif (!angebote.length) return aus({ aktion, weiter: 'eignung_pruefen', verschiebung, ausschliessen: bisherAbgelehnt.map(z => z.start_at), hinweis: '' });\n\n// Nummern werden gegen die tatsächlich angebotenen Vorschlagsnummern geprüft (nicht gegen die Anzahl).\nconst n = angebote.length;\nconst gueltigeNummern = new Set(angebote.map(z => Number(z.vorschlag_nummer)));\nconst nummern = new Set();\nfor (const m of text.matchAll(/(?<![\\d.:])([1-9])(?![\\d:]|\\.\\d|\\s*uhr)/g)) { const z = Number(m[1]); if (gueltigeNummern.has(z)) nummern.add(z); }\nconst woerter = { erste: 1, ersten: 1, erster: 1, eins: 1, zweite: 2, zweiten: 2, zweiter: 2, zwei: 2, dritte: 3, dritten: 3, dritter: 3, drei: 3 };\nfor (const [w, z] of Object.entries(woerter)) if (new RegExp('(^|[^a-zäöüß])' + w + '($|[^a-zäöüß])').test(text) && gueltigeNummern.has(z)) nummern.add(z);\nconst wochentage = ['montag', 'dienstag', 'mittwoch', 'donnerstag', 'freitag', 'samstag', 'sonntag'];\nconst kandidaten = new Set();\nfor (const z of angebote) {\n  const d = utc(z.start_at).setZone(tz);\n  if (text.includes(wochentage[d.weekday - 1])) kandidaten.add(z);\n  if (new RegExp('(?<!\\\\d)0?' + d.day + '\\\\.0?' + d.month + '\\\\.').test(text)) kandidaten.add(z);\n}\nconst ablehnung = /(^|\\s)(keine?[rsn]?)(\\s|$|[.,!])|passt\\s+(mir\\s+|uns\\s+)?(leider\\s+)?nicht|geht\\s+(leider\\s+)?nicht|andere[nr]?\\s+termin|(^|\\s)nein\\b|kann\\s+(ich\\s+)?nicht/.test(text);\n\nlet wahl = null;\nif (nummern.size === 1) wahl = angebote.find(z => Number(z.vorschlag_nummer) === [...nummern][0]) || null;\nelse if (nummern.size === 0 && kandidaten.size === 1) wahl = [...kandidaten][0];\nelse if (nummern.size === 0 && kandidaten.size === 0 && n === 1 && !ablehnung && /(^|\\s)(ja|passt|gerne|einverstanden|ok|okay|bestätigt?)(\\s|$|[.,!])/.test(text)) wahl = angebote[0];\n\nif (!wahl && ablehnung && nummern.size === 0) {\n  // Abgelehnte Vorschläge werden als „abgelehnt“ gespeichert und nie erneut angeboten. Nach der letzten erlaubten Runde\n  // wird nach dem bevorzugten Zeitraum gefragt und eine Mitarbeiteraufgabe angelegt – keine weiteren automatischen Termine.\n  const alleAbgelehnt = bisherAbgelehnt.concat(angebote);\n  const runde = rundenAnzahl(bisherAbgelehnt) + 1;\n  const danach = runde >= MAX_RUNDEN\n    ? { weiter: 'mitarbeiter', mitarbeiter: { ergebnis: 'zeitraum_erfragen', aufgabe_anlegen: true,\n        titel: 'Kunde hat ' + runde + ' Terminvorschlagsrunden abgelehnt – bitte Wunschzeitraum abstimmen',\n        beschreibung: 'Abgelehnte Termine: ' + alleAbgelehnt.map(z => anzeige(z.start_at)).join('; ') + '.' + (verschiebung ? ' Bisheriger Termin bleibt bestehen: ' + anzeige(gebucht.start_at) + '.' : ''),\n        prioritaet: 'normal', termin_status: verschiebung ? 'gebucht' : 'mitarbeiterpruefung', termin_id: verschiebung ? gebucht.id : undefined,\n        gruende: [runde + ' Vorschlagsrunden ohne passenden Termin'],\n        kunden_nachricht: TEXT_ZEITRAUM + (verschiebung ? ' Ihr bisheriger Termin bleibt bestehen.' : '') } }\n    : { weiter: 'eignung_pruefen' };\n  return aus({ aktion, weiter: 'ablehnung_speichern', verschiebung, runde, ablehnung_ids: angebote.map(z => z.id), danach,\n    ausschliessen: alleAbgelehnt.map(z => z.start_at),\n    ab_utc: alleAbgelehnt.reduce((m, z) => (!m || utc(z.start_at) > utc(m) ? z.start_at : m), null),\n    hinweis: 'Schade, dass keiner der Termine passt.' });\n}\nif (!wahl) {\n  return aus({ aktion, weiter: 'antwort', antwort: A('rueckfrage', { termin_status: verschiebung ? 'gebucht' : 'vorgeschlagen',\n    kunden_nachricht: 'Wir konnten Ihre Auswahl leider nicht eindeutig zuordnen. Bitte antworten Sie nur mit der Nummer Ihres Wunschtermins:\\n'\n      + liste(angebote) + '\\nWenn keiner passt, antworten Sie bitte mit „keiner“.',\n    vorschlaege: vorschlagInfo(angebote) }) });\n}\nif (!wahl.gueltig_bis || utc(wahl.gueltig_bis) < jetzt) {\n  return aus({ aktion, weiter: 'eignung_pruefen', verschiebung, ausschliessen: [], hinweis: 'Die bisherigen Terminvorschläge sind leider abgelaufen.' });\n}\nconst idempotenz_id = ['termin', K.betrieb_id, a.anfrage_db_id, wahl.ressource_id, utc(wahl.start_at).toISO()].join('|');\nreturn aus({ aktion, weiter: 'eignung_pruefen', verschiebung, gewaehlt: Object.assign({}, wahl, { idempotenz_id }), ausschliessen: [], hinweis: '' });\n"
+      },
+      "id": "a8bc8e77-90c5-4771-9357-5e40bc41cbf4",
+      "name": "Terminwahl erkennen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        464
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Terminkonfiguration').first().json.supabase_url }}/rest/v1/termine",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.datensaetze) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "d53069e1-256e-415d-b920-e1e26c964f22",
+      "name": "Vorschläge speichern",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        1104
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const A = (ergebnis, x) => Object.assign({ ergebnis, termin_status: null, mitarbeiter_noetig: false, notfall: false, kunden_nachricht: '', gruende: [], vorschlaege: [], termin: null }, x || {});\nconst r = $input.first().json;\nconst T = $('Termine berechnen').first().json;\nif (r.statusCode !== 201 || !Array.isArray(r.body) || r.body.length !== T.datensaetze.length) {\n  throw new Error('Terminvorschläge wurden nicht vollständig gespeichert (HTTP ' + r.statusCode + ')');\n}\nconst vorschlaege = T.vorschlaege.map(v => Object.assign({}, v, { termin_id: (r.body.find(b => b.vorschlag_nummer === v.nummer) || {}).id || null }));\n// Bei Verschiebungsvorschlägen bleibt der Terminstatus „gebucht“ – der bisherige Termin gilt weiter.\nreturn [{ json: { weiter: 'status_schreiben', status: T.verschiebung ? {} : { termin_status: 'vorgeschlagen' },\n  antwort: A('vorgeschlagen', { termin_status: T.verschiebung ? 'gebucht' : 'vorgeschlagen', kunden_nachricht: T.nachricht, vorschlaege, gruende: T.pruefung ? ['Neu geprüft: ' + T.pruefung.join(', ')] : [] }) } }];\n"
+      },
+      "id": "5e03f798-5a42-44f3-bb02-96d7806380f5",
+      "name": "Vorschläge prüfen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        1040
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Terminkonfiguration').first().json.supabase_url }}/rest/v1/termine",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "id",
+              "value": "={{ 'eq.' + $json.gewaehlt.id }}"
+            },
+            {
+              "name": "betrieb_id",
+              "value": "={{ 'eq.' + $('Terminkonfiguration').first().json.betrieb_id }}"
+            },
+            {
+              "name": "status",
+              "value": "eq.vorgeschlagen"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'reserviert', kunden_bestaetigung: 'bestaetigt', idempotenz_id: $json.gewaehlt.idempotenz_id, bestaetigt_at: $now.toUTC().toISO(), updated_at: $now.toUTC().toISO() }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "75430bf1-66ef-4dac-9e38-3178e13e1c3e",
+      "name": "Termin reservieren",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        1328
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Die Datenbank-Reservierung ist der technische Doppelbuchungsschutz (Ausschluss-Constraint, Idempotenz, ein aktiver Termin je Anfrage).\n// PostgREST meldet Überschneidungen (23P01) mit HTTP 400 und Eindeutigkeitsverletzungen (23505) mit 409 – beides ist ein Konflikt.\nconst ok2xx = r => r && r.statusCode >= 200 && r.statusCode < 300;\nconst r = $input.first().json;\nconst g = $('Termine berechnen').first().json.gewaehlt;\nconst zeilen = Array.isArray(r.body) ? r.body : [];\nconst code = r.body && !Array.isArray(r.body) ? String(r.body.code || '') : '';\nconst passt = zeilen.length === 1 && zeilen[0].status === 'reserviert' && (g.id ? zeilen[0].id === g.id : zeilen[0].idempotenz_id === g.idempotenz_id);\nif (ok2xx(r) && passt) {\n  return [{ json: { weiter: 'buchen', termin: zeilen[0] } }];\n}\nif (code === '23P01' || code === '23505' || (ok2xx(r) && zeilen.length === 0)) {\n  const grund = code === '23P01' ? 'Überschneidung mit einem anderen Termin von der Datenbank verhindert'\n    : code === '23505' ? 'Zweite aktive Buchung von der Datenbank verhindert'\n    : 'Vorschlag war nicht mehr offen';\n  return [{ json: { weiter: 'konflikt_nachlesen', grund, db_code: code || null } }];\n}\nthrow new Error('Reservierung fehlgeschlagen (HTTP ' + r.statusCode + (code ? ', ' + code : '') + ')');\n"
+      },
+      "id": "aaf010a5-dbe4-4bb3-ba27-2bb9f22b4f15",
+      "name": "Reservierung auswerten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        1424
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Terminkonfiguration').first().json.supabase_url }}/rest/v1/termine",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "select",
+              "value": "*"
+            },
+            {
+              "name": "betrieb_id",
+              "value": "={{ 'eq.' + $('Terminkonfiguration').first().json.betrieb_id }}"
+            },
+            {
+              "name": "anfrage_db_id",
+              "value": "={{ 'eq.' + $('Terminkonfiguration').first().json.anfrage.anfrage_db_id }}"
+            },
+            {
+              "name": "status",
+              "value": "in.(reserviert,gebucht)"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "ec91f742-4752-47c2-8f8e-d12aa317605d",
+      "name": "Konflikt nachlesen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        1632
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const K = $('Terminkonfiguration').first().json;\nconst tz = K.cfg.zeitzone;\nconst utc = s => DateTime.fromISO(String(s), { zone: 'utc' });\nconst anzeige = s => utc(s).setZone(tz).setLocale('de').toFormat(\"cccc, dd.MM.yyyy 'um' HH:mm 'Uhr'\");\nconst terminInfo = z => ({ termin_id: z.id, start_utc: utc(z.start_at).toISO(), ende_utc: utc(z.ende_at).toISO(), anzeige: anzeige(z.start_at), terminart: z.terminart, status: z.status });\nconst A = (ergebnis, x) => Object.assign({ ergebnis, termin_status: null, mitarbeiter_noetig: false, notfall: false, kunden_nachricht: '', gruende: [], vorschlaege: [], termin: null }, x || {});\nconst ok2xx = r => r && r.statusCode >= 200 && r.statusCode < 300;\n\nconst r = $input.first().json;\nif (!ok2xx(r) || !Array.isArray(r.body)) throw new Error('Konflikt konnte nicht nachgelesen werden');\nconst R = $('Reservierung auswerten').first().json;\nconst g = $('Termine berechnen').first().json.gewaehlt;\nconst jetzt = utc(K.jetzt_utc);\nconst gebucht = r.body.find(z => z.status === 'gebucht');\nif (gebucht) return [{ json: { weiter: 'antwort', antwort: A('bereits_gebucht', { termin_status: 'gebucht', termin: terminInfo(gebucht), gruende: [R.grund],\n  kunden_nachricht: 'Ihr Termin am ' + anzeige(gebucht.start_at) + ' ist bereits verbindlich gebucht. Eine weitere Bestätigung ist nicht nötig.' }) } }];\nconst reserviert = r.body.find(z => z.status === 'reserviert');\nif (reserviert && jetzt.diff(utc(reserviert.updated_at || reserviert.created_at), 'minutes').minutes <= Number(K.cfg.reservierung_ablauf_minuten)) {\n  return [{ json: { weiter: 'antwort', antwort: A('in_bearbeitung', { termin_status: 'kundenbestaetigt', termin: terminInfo(reserviert), gruende: [R.grund, 'Parallele Bestätigung – keine zweite Buchung'] }) } }];\n}\nreturn [{ json: { weiter: 'mitarbeiter', mitarbeiter: {\n  aufgabe_anlegen: true,\n  titel: reserviert ? 'Reservierung ohne Buchung – bitte prüfen' : 'Termin konnte nicht reserviert werden – bitte manuell abstimmen',\n  beschreibung: 'Gewählter Termin: ' + anzeige(g.start_at) + (reserviert ? ', Termin-ID ' + reserviert.id : '') + '.',\n  prioritaet: reserviert ? 'hoch' : 'normal',\n  termin_status: 'mitarbeiterpruefung',\n  termin_id: reserviert ? reserviert.id : undefined,\n  gruende: [R.grund],\n  kunden_nachricht: 'Vielen Dank für Ihre Rückmeldung. Der gewählte Termin wurde leider gerade anderweitig vergeben. Unser Serviceteam meldet sich persönlich mit einem neuen Terminvorschlag.'\n} } }];\n"
+      },
+      "id": "41ca7ce4-537c-4b3f-b9f0-849b8b57bf8c",
+      "name": "Konflikt auswerten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        1712
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "b-0",
+                    "leftValue": "={{ $('Terminkonfiguration').first().json.cfg.kalender.anbieter }}",
+                    "rightValue": "test",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "test"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "b-1",
+                    "leftValue": "={{ $('Terminkonfiguration').first().json.cfg.kalender.anbieter }}",
+                    "rightValue": "outlook",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "outlook"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "9b98b010-8d59-4d63-8566-a4d4d0ab8328",
+      "name": "Kalender für Buchung wählen",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        672,
+        2672
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Test-Kalender: simuliert das Anlegen eines Eintrags, schreibt nirgendwohin.\nconst t = $('Terminkonfiguration').first().json.test || {};\nconst termin = $('Reservierung auswerten').first().json.termin;\nif (t.kalender_fehler_buchung) return [{ json: { quelle: 'testkalender', fehler: 'Testkalender nicht erreichbar (simuliert)' } }];\nreturn [{ json: { quelle: 'testkalender', id: 'TEST-' + termin.id } }];\n"
+      },
+      "id": "0fe20577-1b3d-4150-a1ea-ea65ec971bff",
+      "name": "Testkalender: Eintrag anlegen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        2496
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://graph.microsoft.com/v1.0/users/' + encodeURIComponent($('Terminkonfiguration').first().json.cfg.kalender.outlook.postfach) + ($('Terminkonfiguration').first().json.cfg.kalender.outlook.kalender_id ? '/calendars/' + encodeURIComponent($('Terminkonfiguration').first().json.cfg.kalender.outlook.kalender_id) : '/calendar') + '/events' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOutlookOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "outlook.timezone=\"UTC\""
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify((() => { const K = $('Terminkonfiguration').first().json; const t = $('Reservierung auswerten').first().json.termin; const an = K.anfrage || {}; const f = s => DateTime.fromISO(s, { zone: 'utc' }).toFormat(\"yyyy-MM-dd'T'HH:mm:ss\"); return { subject: 'SHK-Termin: ' + t.terminart + ' (' + (an.anfrage_id || '') + ')', start: { dateTime: f(t.start_at), timeZone: 'UTC' }, end: { dateTime: f(t.ende_at), timeZone: 'UTC' }, location: { displayName: [an.adresse, an.plz, an.ort].filter(Boolean).join(', ') }, body: { contentType: 'text', content: 'Automatisch gebucht durch den AI Terminassistenten. Termin-ID: ' + t.id }, showAs: 'busy', transactionId: t.id }; })()) }}",
+        "options": {}
+      },
+      "id": "c3d5e166-e4a6-42c4-b2fc-ec2c4907a351",
+      "name": "Outlook-Termin anlegen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        896,
+        2784
+      ],
+      "disabled": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Terminkonfiguration').first().json.cfg;\nconst x = $input.first().json;\nif (cfg.kalender.anbieter === 'test') {\n  if (x.quelle !== 'testkalender' || x.fehler || !x.id) throw new Error(x.fehler || 'Testkalender: kein Eintrag angelegt');\n} else if (!x.id || !x.iCalUId) {\n  throw new Error('Outlook-Termin wurde nicht angelegt');\n}\nreturn [{ json: { externe_event_id: String(x.id) } }];\n"
+      },
+      "id": "0853e7a4-51cb-423a-aa76-c0eaeca080de",
+      "name": "Kalendereintrag prüfen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        2592
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Terminkonfiguration').first().json.supabase_url }}/rest/v1/termine",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "id",
+              "value": "={{ 'eq.' + $('Reservierung auswerten').first().json.termin.id }}"
+            },
+            {
+              "name": "betrieb_id",
+              "value": "={{ 'eq.' + $('Terminkonfiguration').first().json.betrieb_id }}"
+            },
+            {
+              "name": "status",
+              "value": "eq.reserviert"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'gebucht', externe_event_id: $json.externe_event_id, gebucht_at: $now.toUTC().toISO(), updated_at: $now.toUTC().toISO() }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "52238e95-bab4-4c2d-9ee7-bf68a386d9b1",
+      "name": "Termin als gebucht speichern",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1344,
+        2544
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const K = $('Terminkonfiguration').first().json;\nconst cfg = K.cfg;\nconst tz = cfg.zeitzone;\nconst a = K.anfrage || {};\nconst utc = s => DateTime.fromISO(String(s), { zone: 'utc' });\nconst anzeige = s => utc(s).setZone(tz).setLocale('de').toFormat(\"cccc, dd.MM.yyyy 'um' HH:mm 'Uhr'\");\nconst terminInfo = z => ({ termin_id: z.id, start_utc: utc(z.start_at).toISO(), ende_utc: utc(z.ende_at).toISO(), anzeige: anzeige(z.start_at), terminart: z.terminart, status: z.status });\nconst A = (ergebnis, x) => Object.assign({ ergebnis, termin_status: null, mitarbeiter_noetig: false, notfall: false, kunden_nachricht: '', gruende: [], vorschlaege: [], termin: null }, x || {});\nconst ok2xx = r => r && r.statusCode >= 200 && r.statusCode < 300;\nconst info = (betreff, zeilen) => ({ betreff, text: zeilen.filter(Boolean).join('\\n') });\n\nconst r = $input.first().json;\nif (!ok2xx(r) || !Array.isArray(r.body) || r.body.length !== 1 || r.body[0].status !== 'gebucht') {\n  throw new Error('Buchung konnte nicht gespeichert werden (HTTP ' + r.statusCode + ')');\n}\nconst t = r.body[0];\nconst E = $('Eignung prüfen').first().json;\nconst dauer = Math.round(utc(t.ende_at).diff(utc(t.start_at), 'minutes').minutes);\nconst mitarbeiter_info = info('Termin gebucht: ' + E.terminart_bezeichnung + ' – ' + anzeige(t.start_at), [\n  'Anfrage: ' + (a.anfrage_id || a.anfrage_db_id), 'Kanal: ' + K.kanal, 'Termin: ' + anzeige(t.start_at) + ' (' + dauer + ' Min.)', 'Termin-ID: ' + t.id\n]);\nreturn [{ json: { weiter: 'status_schreiben', status: { termin_status: 'gebucht', termin_id: t.id },\n  antwort: A('gebucht', { termin_status: 'gebucht', termin: terminInfo(t), mitarbeiter_info,\n    kunden_nachricht: 'Vielen Dank! Ihr Termin ist verbindlich gebucht: ' + anzeige(t.start_at) + ' (' + E.terminart_bezeichnung + ', geplante Dauer ca. ' + dauer + ' Minuten). Falls Sie den Termin nicht wahrnehmen können, antworten Sie bitte auf diese Nachricht.' }) } }];\n"
+      },
+      "id": "884279e3-2ee6-4c66-b89d-d68032f8b60a",
+      "name": "Buchung abschließen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1568,
+        2480
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Terminkonfiguration').first().json.supabase_url }}/rest/v1/termine",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "id",
+              "value": "={{ 'eq.' + $('Reservierung auswerten').first().json.termin.id }}"
+            },
+            {
+              "name": "betrieb_id",
+              "value": "={{ 'eq.' + $('Terminkonfiguration').first().json.betrieb_id }}"
+            },
+            {
+              "name": "status",
+              "value": "eq.reserviert"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'fehler', fehler_code: 'KALENDER', fehler_text: 'Kalendereintrag konnte nicht angelegt werden', updated_at: $now.toUTC().toISO() }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "9fdc861e-732a-4490-8f38-ac7c2eefe51f",
+      "name": "Reservierung als Fehler markieren",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1344,
+        2784
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Kalender nicht erreichbar: keine Bestätigung, stattdessen Mitarbeiteraufgabe.\nconst K = $('Terminkonfiguration').first().json;\nconst ANTWORT_ERWARTET = ['bestaetigen', 'kundenantwort', 'direkt_buchen', 'verschieben', 'stornieren'];\nconst buchung = $('Reservierung als Fehler markieren').isExecuted;\nlet freigegeben = null;\nlet terminId;\nif (buchung) {\n  const r = $('Reservierung als Fehler markieren').first().json;\n  freigegeben = r.statusCode >= 200 && r.statusCode < 300;\n  terminId = $('Reservierung auswerten').first().json.termin.id;\n}\nreturn [{ json: { weiter: 'mitarbeiter', mitarbeiter: {\n  aufgabe_anlegen: true,\n  titel: 'Kalender nicht erreichbar – Termin bitte manuell planen',\n  beschreibung: buchung\n    ? 'Der Kunde hat einen Termin bestätigt, der Kalendereintrag konnte nicht angelegt werden. Reservierung ' + (freigegeben ? 'wurde freigegeben' : 'konnte NICHT freigegeben werden – bitte Termin ' + terminId + ' prüfen') + '.'\n    : 'Kalenderbelegung konnte nicht gelesen werden; es wurden keine Termine angeboten.',\n  prioritaet: 'hoch',\n  termin_status: 'fehler',\n  termin_id: terminId,\n  gruende: ['Kalender nicht erreichbar'],\n  kunden_nachricht: ANTWORT_ERWARTET.includes(K.aktion) ? 'Vielen Dank für Ihre Rückmeldung. Ihr Termin konnte gerade nicht automatisch bestätigt werden. Unser Serviceteam meldet sich persönlich bei Ihnen.' : ''\n} } }];\n"
+      },
+      "id": "2d48730c-f34c-4780-a966-348bd0554227",
+      "name": "Kalenderfehler melden",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1568,
+        960
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const tz = $('Terminkonfiguration').first().json.cfg.zeitzone;\nconst anzeige = s => DateTime.fromISO(String(s), { zone: 'utc' }).setZone(tz).setLocale('de').toFormat(\"cccc, dd.MM.yyyy 'um' HH:mm 'Uhr'\");\nconst termin = $('Reservierung auswerten').first().json.termin;\nconst kal = $('Kalendereintrag prüfen').isExecuted ? $('Kalendereintrag prüfen').first().json.externe_event_id : '';\nreturn [{ json: { weiter: 'mitarbeiter', mitarbeiter: {\n  aufgabe_anlegen: true,\n  titel: 'Kalendereintrag angelegt, Buchung nicht gespeichert – bitte sofort prüfen',\n  beschreibung: 'Termin ' + termin.id + ' (' + anzeige(termin.start_at) + ') ist reserviert, Kalendereintrag ' + kal + ' existiert, der Status „gebucht“ konnte nicht gespeichert werden.',\n  prioritaet: 'hoch',\n  termin_status: 'fehler',\n  termin_id: termin.id,\n  gruende: ['Buchung konnte nicht gespeichert werden'],\n  kunden_nachricht: 'Vielen Dank für Ihre Rückmeldung. Ihr Termin konnte gerade nicht automatisch bestätigt werden. Unser Serviceteam meldet sich persönlich bei Ihnen.'\n} } }];\n"
+      },
+      "id": "a7edbab9-82f5-4523-8fb5-7289bea3da4f",
+      "name": "Buchungsfehler melden",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1792,
+        2784
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const K = $('Terminkonfiguration').first().json;\nconst ANTWORT_ERWARTET = ['bestaetigen', 'kundenantwort', 'direkt_buchen', 'verschieben', 'stornieren'];\nconst x = $input.first().json;\nconst meldung = String((x.error && (x.error.message || x.error)) || x.message || 'unbekannter Fehler').slice(0, 300);\nreturn [{ json: { weiter: 'mitarbeiter', mitarbeiter: {\n  aufgabe_anlegen: true,\n  titel: 'Technischer Fehler im Terminassistenten – Termin bitte manuell planen',\n  beschreibung: 'Datenbankzugriff fehlgeschlagen: ' + meldung,\n  prioritaet: 'hoch',\n  termin_status: 'fehler',\n  gruende: ['Datenbankfehler'],\n  kunden_nachricht: ANTWORT_ERWARTET.includes(K.aktion) ? 'Vielen Dank für Ihre Rückmeldung. Ihr Termin konnte gerade nicht automatisch bestätigt werden. Unser Serviceteam meldet sich persönlich bei Ihnen.' : ''\n} } }];\n"
+      },
+      "id": "06056f49-f0e8-4451-b71b-a578dd342650",
+      "name": "Datenbankfehler melden",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        1232
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const K = $('Terminkonfiguration').first().json;\nconst a = K.anfrage || {};\nconst anfrageOk = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(a.anfrage_db_id || ''));\nconst A = (ergebnis, x) => Object.assign({ ergebnis, termin_status: null, mitarbeiter_noetig: false, notfall: false, kunden_nachricht: '', gruende: [], vorschlaege: [], termin: null }, x || {});\n\nif ($runIndex > 0) throw new Error('Mitarbeiterfall mehrfach ausgelöst – Abbruch, um eine Schleife zu verhindern');\nconst m = $input.first().json.mitarbeiter || {};\nconst PRIO = ['niedrig', 'normal', 'hoch', 'notfall'];\nconst status = { termin_status: anfrageOk ? (m.termin_status || null) : null };\nif (m.termin_id) status.termin_id = m.termin_id;\nconst antwort = A(m.ergebnis || 'mitarbeiter', {\n  termin_status: status.termin_status, mitarbeiter_noetig: true, notfall: Boolean(m.notfall), kunden_nachricht: m.kunden_nachricht || '',\n  gruende: m.gruende || [], termin: m.termin || null, aufgabe_angelegt: false,\n  mitarbeiter_info: m.mitarbeiter_info || { betreff: 'Terminassistent: ' + (m.titel || 'Mitarbeiterprüfung nötig'), text: (m.gruende || []).join('; ') }\n});\nif (m.aufgabe_anlegen && anfrageOk) {\n  // Eigene Aufgabe je Anfrage vom Typ termin_pruefen (DB erlaubt nur eine Aufgabe je Anfrage und Typ;\n  // die Anfrageprüfung des Hauptworkflows bleibt unverändert). Wiederholte Fälle aktualisieren diese Aufgabe.\n  const aufgabe = {\n    betrieb_id: K.betrieb_id,\n    anfrage_db_id: a.anfrage_db_id,\n    typ: 'termin_pruefen',\n    titel: ('Terminassistent: ' + (m.titel || 'Termin manuell planen')).slice(0, 200),\n    beschreibung: ('Anfrage ' + (a.anfrage_id || a.anfrage_db_id) + ' (' + K.kanal + ') – ' + (m.gruende || []).join('; ') + (m.beschreibung ? '. ' + m.beschreibung : '') + ' (Stand ' + new Date().toISOString() + ')').slice(0, 2000),\n    prioritaet: PRIO.includes(m.prioritaet) ? m.prioritaet : 'normal',\n    status: 'offen',\n    freigabe_erforderlich: true,\n    termin_status: m.termin_status || 'mitarbeiterpruefung',\n    termin_id: m.termin_id || null\n  };\n  antwort.aufgabe_angelegt = true;\n  return [{ json: { weiter: 'aufgabe_anlegen', aufgabe, status, antwort } }];\n}\nif (status.termin_status) return [{ json: { weiter: 'status_schreiben', status, antwort } }];\nreturn [{ json: { weiter: 'antwort', antwort } }];\n"
+      },
+      "id": "e011a32e-11b6-40ba-9bb8-5e248592a626",
+      "name": "Mitarbeiterfall vorbereiten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        2880
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Terminkonfiguration').first().json.supabase_url }}/rest/v1/aufgaben?on_conflict=anfrage_db_id,typ",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.aufgabe) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "664df1d1-d330-45bf-8f94-d0c9db2305c7",
+      "name": "Mitarbeiteraufgabe anlegen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        3264
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Upsert auf (anfrage_db_id, typ): 201 = neu angelegt, 200/204 = bestehende Terminaufgabe aktualisiert.\nconst r = $input.first().json;\nconst M = $('Mitarbeiterfall vorbereiten').first().json;\nif (![200, 201, 204].includes(r.statusCode)) {\n  const code = r.body && r.body.code ? ', ' + r.body.code : '';\n  throw new Error('Mitarbeiteraufgabe konnte nicht angelegt werden (HTTP ' + r.statusCode + code + ')');\n}\nreturn [{ json: { weiter: 'status_schreiben', status: M.status, antwort: M.antwort } }];\n"
+      },
+      "id": "a50f9c08-9b20-40e3-bff2-e88947170795",
+      "name": "Mitarbeiteraufgabe prüfen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        3264
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Terminstatus an Anfrage und zugehörigen Aufgaben – erst danach geht eine Antwort zurück.\nconst K = $('Terminkonfiguration').first().json;\nconst a = K.anfrage || {};\nconst anfrageOk = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(a.anfrage_db_id || ''));\nconst x = $input.first().json;\nconst s = x.status || {};\nif (!anfrageOk || (!s.termin_status && !s.zuruecksetzen)) return [{ json: { weiter: 'antwort', antwort: x.antwort } }];\nconst body = s.zuruecksetzen\n  ? { termin_status: null, termin_id: null, updated_at: new Date().toISOString() }\n  : Object.assign({ termin_status: s.termin_status, updated_at: new Date().toISOString() }, s.termin_id ? { termin_id: s.termin_id } : {});\nreturn ['anfragen', 'aufgaben'].map(tabelle => ({ json: {\n  weiter: 'status_patch',\n  tabelle,\n  url: K.supabase_url + '/rest/v1/' + tabelle + '?' + (tabelle === 'anfragen' ? 'id' : 'anfrage_db_id') + '=eq.' + a.anfrage_db_id + '&betrieb_id=eq.' + K.betrieb_id,\n  body,\n  antwort: x.antwort\n} }));\n"
+      },
+      "id": "431a824f-3353-454f-a6d9-1988ea62825b",
+      "name": "Terminstatus vorbereiten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        3648
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $json.url }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.body) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "339f540f-faeb-49ff-bfdd-97f0df25efaa",
+      "name": "Terminstatus schreiben",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        4032
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const erwartet = $('Terminstatus vorbereiten').all();\nconst r = $input.all();\nif (r.length !== erwartet.length || r.some(i => !(i.json.statusCode >= 200 && i.json.statusCode < 300))) {\n  throw new Error('Terminstatus konnte nicht vollständig gespeichert werden');\n}\nreturn [{ json: { weiter: 'antwort', antwort: erwartet[0].json.antwort } }];\n"
+      },
+      "id": "40b1e536-46fe-42c8-ae8b-125bc0428441",
+      "name": "Terminstatus prüfen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        4032
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Einheitliche, kanalneutrale Rückgabe – mit Leitplanke gegen Preise/Diagnosen.\nconst x = ($input.first().json.antwort) || {};\nconst K = $('Terminkonfiguration').first().json;\nconst gruende = Array.isArray(x.gruende) ? x.gruende.filter(Boolean) : [];\nlet text = String(x.kunden_nachricht || '');\nlet mitarbeiter = Boolean(x.mitarbeiter_noetig);\nconst PREIS = /\\d+([.,]\\d+)?\\s*(€|eur\\b|euro)|\\bkosten|\\bpreis|\\bgünstig|\\bkostenlos|\\bgratis|\\bpauschale/i;\nconst DIAGNOSE = /\\bdiagnose\\b|ursache ist|liegt (wahrscheinlich|vermutlich) an|\\bist defekt\\b/i;\nif (text && (PREIS.test(text) || DIAGNOSE.test(text))) {\n  gruende.push('Kundennachricht wegen Preis- oder Diagnoseinhalt zurückgehalten');\n  text = '';\n  mitarbeiter = true;\n}\nreturn [{ json: {\n  ergebnis: x.ergebnis || 'fehler',\n  aktion: K.aktion || null,\n  kanal: K.kanal || null,\n  termin_status: x.termin_status ?? null,\n  mitarbeiter_noetig: mitarbeiter,\n  notfall: Boolean(x.notfall),\n  kunden_nachricht: text,\n  vorschau_nachricht: x.vorschau_nachricht || '',\n  gruende,\n  vorschlaege: Array.isArray(x.vorschlaege) ? x.vorschlaege : [],\n  termin: x.termin || null,\n  aufgabe_angelegt: Boolean(x.aufgabe_angelegt),\n  mitarbeiter_info: x.mitarbeiter_info || null,\n  modus: K.cfg ? K.cfg.modus : null\n} }];\n"
+      },
+      "id": "ffc66647-a626-4429-9fdf-83907dae36b0",
+      "name": "Antwort zurückgeben",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        4448
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "throw new Error('Terminassistent: unbekannter Schritt „' + String($input.first().json.weiter) + '“');\n"
+      },
+      "id": "72efbdf0-9ecf-4e0a-8768-6e71f29b3a55",
+      "name": "Unbekannter Schritt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        4640
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Einziger Einstieg für Kalenderänderungen (Anlegen/Löschen). Folgeschritte für Erfolg und Fehler reisen mit.\nconst k = $input.first().json.kalender || {};\nif (!['anlegen', 'loeschen'].includes(k.op)) throw new Error('Kalenderaktion ungültig');\nif (!k.bei_erfolg || !k.bei_fehler) throw new Error('Kalenderaktion ohne Folgeschritt');\nif (k.op === 'loeschen' && !k.event_id) throw new Error('Kalenderaktion: Eintrags-ID fehlt');\nreturn [{ json: { op: k.op, event_id: k.event_id || null, termin: k.termin || {}, bei_erfolg: k.bei_erfolg, bei_fehler: k.bei_fehler } }];\n"
+      },
+      "id": "9c2f95cd-38f7-4a91-af57-969a31750b8a",
+      "name": "Kalenderaktion anfordern",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        2112
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "ka-0",
+                    "leftValue": "={{ $('Terminkonfiguration').first().json.cfg.kalender.anbieter }}",
+                    "rightValue": "test",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "test"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "ka-1",
+                    "leftValue": "={{ $('Terminkonfiguration').first().json.cfg.kalender.anbieter }}",
+                    "rightValue": "outlook",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "outlook"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0056434b-283e-4e44-a04a-900446e5ed0b",
+      "name": "Kalenderaktion: Anbieter wählen",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        896,
+        2112
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Test-Kalender: simuliert Anlegen/Löschen, schreibt nirgendwohin. Liefert wie ein echter Kalender nur das Ergebnis.\nconst t = $('Terminkonfiguration').first().json.test || {};\nconst R = $('Kalenderaktion anfordern').first().json;\nif (R.op === 'anlegen') {\n  if (t.kalender_fehler_aenderung) return [{ json: { quelle: 'testkalender', fehler: 'Testkalender nicht erreichbar (simuliert)' } }];\n  return [{ json: { quelle: 'testkalender', id: 'TEST-' + R.termin.id + '-' + Date.now() } }];\n}\nif (t.kalender_fehler_loeschen) return [{ json: { quelle: 'testkalender', fehler: 'Testkalender nicht erreichbar (simuliert)' } }];\nreturn [{ json: { quelle: 'testkalender', geloescht: R.event_id } }];\n"
+      },
+      "id": "e7c8e5d0-9a78-4455-9f73-4da9568d4ac4",
+      "name": "Testkalender: Aktion ausführen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1344,
+        1856
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "oa-0",
+                    "leftValue": "={{ $('Kalenderaktion anfordern').first().json.op }}",
+                    "rightValue": "anlegen",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "anlegen"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "oa-1",
+                    "leftValue": "={{ $('Kalenderaktion anfordern').first().json.op }}",
+                    "rightValue": "loeschen",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "loeschen"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b6cabac7-3b0d-4db5-b33d-89fcb04991d2",
+      "name": "Outlook-Aktion wählen",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        1120,
+        2160
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://graph.microsoft.com/v1.0/users/' + encodeURIComponent($('Terminkonfiguration').first().json.cfg.kalender.outlook.postfach) + ($('Terminkonfiguration').first().json.cfg.kalender.outlook.kalender_id ? '/calendars/' + encodeURIComponent($('Terminkonfiguration').first().json.cfg.kalender.outlook.kalender_id) : '/calendar') + '/events' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOutlookOAuth2Api",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "outlook.timezone=\"UTC\""
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify((() => { const K = $('Terminkonfiguration').first().json; const R = $('Kalenderaktion anfordern').first().json; const t = R.termin || {}; const an = K.anfrage || {}; const f = s => DateTime.fromISO(s, { zone: 'utc' }).toFormat(\"yyyy-MM-dd'T'HH:mm:ss\"); return { subject: 'SHK-Termin: ' + t.terminart + ' (' + (an.anfrage_id || '') + ')', start: { dateTime: f(t.start_at), timeZone: 'UTC' }, end: { dateTime: f(t.ende_at), timeZone: 'UTC' }, location: { displayName: [an.adresse, an.plz, an.ort].filter(Boolean).join(', ') }, body: { contentType: 'text', content: 'Automatisch durch den AI Terminassistenten geändert. Termin-ID: ' + t.id }, showAs: 'busy', transactionId: String(t.id) + '|' + t.start_at }; })()) }}",
+        "options": {}
+      },
+      "id": "581aff05-f9d9-46de-903f-1d8b3951646c",
+      "name": "Outlook-Termin anlegen (Änderung)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1344,
+        2064
+      ],
+      "disabled": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "method": "DELETE",
+        "url": "={{ 'https://graph.microsoft.com/v1.0/users/' + encodeURIComponent($('Terminkonfiguration').first().json.cfg.kalender.outlook.postfach) + '/events/' + encodeURIComponent($('Kalenderaktion anfordern').first().json.event_id) }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "microsoftOutlookOAuth2Api",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "e015a398-d68c-4845-b67b-fbf6727e3457",
+      "name": "Outlook-Termin löschen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1344,
+        2288
+      ],
+      "disabled": true,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "const cfg = $('Terminkonfiguration').first().json.cfg;\nconst R = $('Kalenderaktion anfordern').first().json;\nconst x = $input.first().json;\nlet eventId = null;\nif (cfg.kalender.anbieter === 'test') {\n  if (x.quelle !== 'testkalender' || x.fehler) throw new Error(x.fehler || 'Testkalender: keine Antwort');\n  if (R.op === 'anlegen') {\n    if (!x.id) throw new Error('Testkalender: kein Eintrag angelegt');\n    eventId = String(x.id);\n  } else if (x.geloescht !== R.event_id) {\n    throw new Error('Testkalender: Eintrag nicht gelöscht');\n  }\n} else if (R.op === 'anlegen') {\n  if (!x.id || !x.iCalUId) throw new Error('Outlook-Termin wurde nicht angelegt');\n  eventId = String(x.id);\n} else if (x.statusCode !== 204) {\n  throw new Error('Outlook-Termin wurde nicht gelöscht');\n}\nreturn [{ json: Object.assign({}, R.bei_erfolg, { kalender_ergebnis: { op: R.op, event_id: eventId || R.event_id } }) }];\n"
+      },
+      "id": "70aacfe4-5067-407e-a287-bb689f9d2cbd",
+      "name": "Kalenderaktion prüfen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1568,
+        1952
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Kalenderfehler: vorbereiteten sicheren Folgeschritt ausführen (kein Terminversprechen an den Kunden).\nconst R = $('Kalenderaktion anfordern').first().json;\nconst x = $input.first().json;\nconst meldung = String((x.error && (x.error.message || x.error)) || x.message || 'Kalender nicht erreichbar').slice(0, 200);\nconst f = JSON.parse(JSON.stringify(R.bei_fehler));\nif (f.mitarbeiter) f.mitarbeiter.beschreibung = [f.mitarbeiter.beschreibung, 'Kalendermeldung: ' + meldung].filter(Boolean).join(' ');\nreturn [{ json: Object.assign(f, { kalender_fehler: meldung }) }];\n"
+      },
+      "id": "0ea7b513-7870-4141-8883-ab80997b75cc",
+      "name": "Kalenderaktion fehlgeschlagen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1792,
+        2240
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Terminkonfiguration').first().json.supabase_url }}/rest/v1/termine",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "id",
+              "value": "={{ 'eq.' + $json.verschiebung.alt.id }}"
+            },
+            {
+              "name": "betrieb_id",
+              "value": "={{ 'eq.' + $('Terminkonfiguration').first().json.betrieb_id }}"
+            },
+            {
+              "name": "status",
+              "value": "eq.gebucht"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ start_at: $json.verschiebung.neu.start_at, ende_at: $json.verschiebung.neu.ende_at, belegt_von: $json.verschiebung.neu.belegt_von, belegt_bis: $json.verschiebung.neu.belegt_bis, puffer_vor_minuten: $json.verschiebung.neu.puffer_vor_minuten, puffer_nach_minuten: $json.verschiebung.neu.puffer_nach_minuten, idempotenz_id: $json.verschiebung.neu.idempotenz_id, externe_event_id: $json.kalender_ergebnis.event_id, vorschlag_gruppe: $json.verschiebung.neu.vorschlag_gruppe, vorschlag_nummer: $json.verschiebung.neu.vorschlag_nummer, kunden_bestaetigung: 'bestaetigt', bestaetigt_at: $now.toUTC().toISO(), gebucht_at: $now.toUTC().toISO(), updated_at: $now.toUTC().toISO() }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "00f44f7d-6abb-4299-9e10-b9863985fc6d",
+      "name": "Termin verschieben (atomar)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        3072
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const K = $('Terminkonfiguration').first().json;\nconst cfg = K.cfg;\nconst tz = cfg.zeitzone;\nconst utc = s => DateTime.fromISO(String(s), { zone: 'utc' });\nconst anzeige = s => utc(s).setZone(tz).setLocale('de').toFormat(\"cccc, dd.MM.yyyy 'um' HH:mm 'Uhr'\");\nconst ok2xx = r => r && r.statusCode >= 200 && r.statusCode < 300;\n\n// Die Verschiebung ist ein einziges Update der bestehenden Buchung: entweder vollständig oder gar nicht.\nconst P = $('Kalenderaktion prüfen').first().json;\nconst v = P.verschiebung;\nconst alt = v.alt;\nconst neuEvent = P.kalender_ergebnis.event_id;\nconst r = $input.first().json;\nconst zeilen = Array.isArray(r.body) ? r.body : [];\nconst code = r.body && !Array.isArray(r.body) ? String(r.body.code || '') : '';\nif (ok2xx(r) && zeilen.length === 1 && zeilen[0].id === alt.id && zeilen[0].status === 'gebucht' && utc(zeilen[0].start_at).toMillis() === utc(v.neu.start_at).toMillis()) {\n  const erfolg = { weiter: 'verschieben_historie', verschoben: zeilen[0], alt, alter_eintrag_geloescht: true };\n  if (!alt.externe_event_id) return [{ json: erfolg }];\n  return [{ json: { weiter: 'kalender_aktion', kalender: { op: 'loeschen', event_id: alt.externe_event_id, termin: alt,\n    bei_erfolg: erfolg, bei_fehler: Object.assign({}, erfolg, { alter_eintrag_geloescht: false }) } } }];\n}\nconst grund = code === '23P01' ? 'Neuer Termin überschneidet sich inzwischen mit einer anderen Buchung'\n  : code === '23505' ? 'Neuer Termin von der Datenbank abgelehnt (Doppelbuchung)'\n  : (ok2xx(r) ? 'Bisheriger Termin war nicht mehr gebucht' : 'Verschiebung konnte nicht gespeichert werden (HTTP ' + (r.statusCode || '–') + ')');\nconst kunde = 'Vielen Dank für Ihre Rückmeldung. Der gewählte neue Termin ist leider nicht mehr verfügbar. Ihr bisheriger Termin am ' + anzeige(alt.start_at) + ' bleibt bestehen. Unser Serviceteam meldet sich persönlich.';\nconst ma = (hoch, zusatz) => ({ weiter: 'mitarbeiter', mitarbeiter: {\n  aufgabe_anlegen: true, titel: 'Verschiebung nicht durchgeführt – bitte abstimmen',\n  beschreibung: grund + '. Bisheriger Termin bleibt: ' + anzeige(alt.start_at) + '. Gewünscht: ' + anzeige(v.neu.start_at) + '.' + (zusatz || ''),\n  prioritaet: hoch ? 'hoch' : 'normal', termin_status: 'gebucht', termin_id: alt.id, gruende: [grund], kunden_nachricht: kunde\n} });\nreturn [{ json: { weiter: 'kalender_aktion', kalender: { op: 'loeschen', event_id: neuEvent, termin: { id: alt.id },\n  bei_erfolg: ma(false), bei_fehler: ma(true, ' Achtung: neuer Kalendereintrag ' + neuEvent + ' konnte nicht entfernt werden – bitte manuell löschen.') } } }];\n"
+      },
+      "id": "2618a0d7-1676-4bdb-a65b-d272ee8b090b",
+      "name": "Verschiebung auswerten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        3072
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Nachvollziehbarkeit: der bisherige Termin wird als Verlaufszeile (status storniert) festgehalten.\nconst x = $input.first().json;\nconst alt = x.alt, neu = x.verschoben;\nif (!alt || !neu) throw new Error('Verschiebung: Daten fehlen');\nconst geloescht = x.alter_eintrag_geloescht === true && !x.kalender_fehler;\nreturn [{ json: { alt, neu, alter_eintrag_geloescht: geloescht, historie: {\n  betrieb_id: alt.betrieb_id, anfrage_db_id: alt.anfrage_db_id, terminart: alt.terminart, ressource_id: alt.ressource_id, kalender_anbieter: alt.kalender_anbieter,\n  status: 'storniert', kunden_bestaetigung: 'bestaetigt', start_at: alt.start_at, ende_at: alt.ende_at,\n  puffer_vor_minuten: alt.puffer_vor_minuten, puffer_nach_minuten: alt.puffer_nach_minuten, belegt_von: alt.belegt_von, belegt_bis: alt.belegt_bis,\n  zeitzone: alt.zeitzone, vorschlag_gruppe: 'HISTORIE-VERSCHIEBUNG', fehler_code: 'VERSCHOBEN',\n  fehler_text: ('Verschoben auf ' + neu.start_at + ' (Termin-ID ' + neu.id + ') am ' + new Date().toISOString() + '; alter Kalendereintrag ' + (alt.externe_event_id || '–') + (geloescht ? ' gelöscht' : ' NICHT gelöscht')).slice(0, 500),\n  bestaetigt_at: alt.bestaetigt_at, gebucht_at: alt.gebucht_at\n} } }];\n"
+      },
+      "id": "aa45096d-822b-41c4-9dc5-05369c5a32b1",
+      "name": "Verschiebung protokollieren vorbereiten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        672,
+        3456
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Terminkonfiguration').first().json.supabase_url }}/rest/v1/termine",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.historie) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "3bf214a7-3605-4170-ad2c-b531d7ca983d",
+      "name": "Verschiebung protokollieren",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        896,
+        3456
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const K = $('Terminkonfiguration').first().json;\nconst cfg = K.cfg;\nconst tz = cfg.zeitzone;\nconst a = K.anfrage || {};\nconst utc = s => DateTime.fromISO(String(s), { zone: 'utc' });\nconst anzeige = s => utc(s).setZone(tz).setLocale('de').toFormat(\"cccc, dd.MM.yyyy 'um' HH:mm 'Uhr'\");\nconst terminInfo = z => ({ termin_id: z.id, start_utc: utc(z.start_at).toISO(), ende_utc: utc(z.ende_at).toISO(), anzeige: anzeige(z.start_at), terminart: z.terminart, status: z.status });\nconst A = (ergebnis, x) => Object.assign({ ergebnis, termin_status: null, mitarbeiter_noetig: false, notfall: false, kunden_nachricht: '', gruende: [], vorschlaege: [], termin: null }, x || {});\nconst info = (betreff, zeilen) => ({ betreff, text: zeilen.filter(Boolean).join('\\n') });\n\nconst V = $('Verschiebung protokollieren vorbereiten').first().json;\nconst r = $input.first().json;\nconst historieOk = Boolean(r && r.statusCode === 201);\nconst neu = V.neu, alt = V.alt;\nconst E = $('Eignung prüfen').first().json;\nconst nachricht = 'Ihr Termin wurde verschoben. Neuer Termin: ' + anzeige(neu.start_at) + ' (' + E.terminart_bezeichnung + '). Der bisherige Termin am ' + anzeige(alt.start_at) + ' entfällt.';\nconst mitarbeiter_info = info('Termin verschoben: ' + anzeige(alt.start_at) + ' → ' + anzeige(neu.start_at), [\n  'Anfrage: ' + (a.anfrage_id || a.anfrage_db_id), 'Kanal: ' + K.kanal, 'Termin-ID: ' + neu.id,\n  V.alter_eintrag_geloescht ? '' : 'Achtung: alter Kalendereintrag wurde nicht gelöscht',\n  historieOk ? '' : 'Hinweis: Verlaufszeile konnte nicht gespeichert werden'\n]);\nif (!V.alter_eintrag_geloescht || !historieOk) {\n  return [{ json: { weiter: 'mitarbeiter', mitarbeiter: {\n    ergebnis: 'verschoben', termin: terminInfo(neu), mitarbeiter_info,\n    aufgabe_anlegen: true, titel: 'Termin verschoben – bitte Kalender/Verlauf prüfen', beschreibung: mitarbeiter_info.text.replace(/\\n/g, '; '),\n    prioritaet: 'normal', termin_status: 'gebucht', termin_id: neu.id,\n    gruende: [V.alter_eintrag_geloescht ? 'Verlaufszeile fehlt' : 'Alter Kalendereintrag nicht gelöscht'], kunden_nachricht: nachricht\n  } } }];\n}\nreturn [{ json: { weiter: 'status_schreiben', status: { termin_status: 'gebucht', termin_id: neu.id },\n  antwort: A('verschoben', { termin_status: 'gebucht', termin: terminInfo(neu), kunden_nachricht: nachricht, mitarbeiter_info }) } }];\n"
+      },
+      "id": "a29343ec-8f33-443e-a076-527a01e819ec",
+      "name": "Verschiebung abschließen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        3456
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Terminkonfiguration').first().json.supabase_url }}/rest/v1/termine",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "id",
+              "value": "={{ 'eq.' + $json.termin.id }}"
+            },
+            {
+              "name": "betrieb_id",
+              "value": "={{ 'eq.' + $('Terminkonfiguration').first().json.betrieb_id }}"
+            },
+            {
+              "name": "status",
+              "value": "eq.gebucht"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'storniert', fehler_code: 'STORNO_KUNDE', fehler_text: 'Storniert durch Kunden über ' + $('Terminkonfiguration').first().json.kanal + ' am ' + $now.toUTC().toISO(), updated_at: $now.toUTC().toISO() }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "e5a5562e-8570-4184-988e-2742dee5252c",
+      "name": "Termin als storniert speichern",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        3840
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "const K = $('Terminkonfiguration').first().json;\nconst cfg = K.cfg;\nconst tz = cfg.zeitzone;\nconst a = K.anfrage || {};\nconst utc = s => DateTime.fromISO(String(s), { zone: 'utc' });\nconst anzeige = s => utc(s).setZone(tz).setLocale('de').toFormat(\"cccc, dd.MM.yyyy 'um' HH:mm 'Uhr'\");\nconst terminInfo = z => ({ termin_id: z.id, start_utc: utc(z.start_at).toISO(), ende_utc: utc(z.ende_at).toISO(), anzeige: anzeige(z.start_at), terminart: z.terminart, status: z.status });\nconst A = (ergebnis, x) => Object.assign({ ergebnis, termin_status: null, mitarbeiter_noetig: false, notfall: false, kunden_nachricht: '', gruende: [], vorschlaege: [], termin: null }, x || {});\nconst ok2xx = r => r && r.statusCode >= 200 && r.statusCode < 300;\nconst info = (betreff, zeilen) => ({ betreff, text: zeilen.filter(Boolean).join('\\n') });\n\nconst t = $('Terminwahl erkennen').first().json.storno_termin;\nconst r = $input.first().json;\nconst zeilen = Array.isArray(r.body) ? r.body : [];\nconst kalenderGeloescht = $('Kalenderaktion prüfen').isExecuted;\nif (ok2xx(r) && zeilen.length === 1 && zeilen[0].status === 'storniert') {\n  const mitarbeiter_info = info('Termin storniert: ' + anzeige(t.start_at), ['Anfrage: ' + (a.anfrage_id || a.anfrage_db_id), 'Kanal: ' + K.kanal, 'Termin-ID: ' + t.id]);\n  return [{ json: { weiter: 'status_schreiben', status: { zuruecksetzen: true },\n    antwort: A('storniert', { termin: terminInfo(zeilen[0]), mitarbeiter_info,\n      kunden_nachricht: 'Ihr Termin am ' + anzeige(t.start_at) + ' wurde storniert. Wenn Sie einen neuen Termin wünschen, antworten Sie gerne auf diese Nachricht.' }) } }];\n}\nreturn [{ json: { weiter: 'mitarbeiter', mitarbeiter: {\n  aufgabe_anlegen: true, titel: 'Stornierung nicht vollständig – bitte prüfen',\n  beschreibung: 'Termin ' + t.id + ' (' + anzeige(t.start_at) + '): Kalendereintrag ' + (kalenderGeloescht ? 'gelöscht' : 'unverändert') + ', Status „storniert“ nicht gespeichert (HTTP ' + (r.statusCode || '–') + ').',\n  prioritaet: 'hoch', termin_status: 'fehler', termin_id: t.id, gruende: ['Stornierung konnte nicht gespeichert werden'],\n  kunden_nachricht: 'Vielen Dank, Ihr Stornierungswunsch ist eingegangen. Die Stornierung konnte gerade nicht automatisch abgeschlossen werden; unser Serviceteam meldet sich persönlich bei Ihnen.'\n} } }];\n"
+      },
+      "id": "c461d0d0-0179-4885-ac89-df1a52a5b4c0",
+      "name": "Storno abschließen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        3840
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Terminkonfiguration').first().json.supabase_url }}/rest/v1/termine",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.datensatz) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "c586b339-3738-4d3c-8b5e-15d69764738e",
+      "name": "Termin direkt reservieren",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        4256
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Reservierungen, die länger als die Ablaufzeit nicht gebucht wurden, dürfen keine Termine dauerhaft blockieren.\n// Automatisch freigegeben wird nur eindeutig: andere Anfrage, Status „reserviert“, älter als die Ablaufzeit,\n// kein verknüpfter Kalendereintrag und kein Kalendereintrag im Terminzeitraum. Alles andere bleibt blockiert\n// und geht an die Mitarbeiterprüfung. Kalendereinträge werden hier nie gelöscht.\nconst K = $('Terminkonfiguration').first().json;\nconst utc = s => DateTime.fromISO(String(s), { zone: 'utc' });\nconst ms = s => utc(s).toMillis();\nconst ueberlappt = (a1, a2, b1, b2) => a1 < b2 && b1 < a2;\nconst x = $input.first().json;\nconst grenze = utc(K.jetzt_utc).minus({ minutes: Number(K.cfg.reservierung_ablauf_minuten) });\nconst eigene = String((K.anfrage || {}).anfrage_db_id || '');\nconst sicher = [], unsicher = [];\nfor (const r of x.db_belegt) {\n  if (r.status !== 'reserviert' || r.anfrage_db_id === eigene) continue;\n  const stand = utc(r.updated_at);\n  if (!stand.isValid || stand >= grenze) continue;\n  const kalender = x.kalender_belegt.some(k => ueberlappt(ms(k.von_utc), ms(k.bis_utc), ms(r.start_at), ms(r.ende_at)));\n  (r.externe_event_id || kalender ? unsicher : sicher).push(r);\n}\nconst daten = { kalender_belegt: x.kalender_belegt, db_belegt: x.db_belegt };\nif (!sicher.length && !unsicher.length) return [{ json: Object.assign({ weiter: 'termine_berechnen' }, daten) }];\nreturn [{ json: Object.assign({ weiter: 'reservierungen_freigeben', grenze_utc: grenze.toISO(), sicher, unsicher }, daten) }];\n"
+      },
+      "id": "8a680cc6-5c97-469b-881f-8b2a480106b0",
+      "name": "Abgelaufene Reservierungen prüfen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1568,
+        -16
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Terminkonfiguration').first().json.supabase_url }}/rest/v1/termine",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "id",
+              "value": "={{ 'in.(' + ($json.sicher.length ? $json.sicher.map(r => r.id).join(',') : '00000000-0000-0000-0000-000000000000') + ')' }}"
+            },
+            {
+              "name": "betrieb_id",
+              "value": "={{ 'eq.' + $('Terminkonfiguration').first().json.betrieb_id }}"
+            },
+            {
+              "name": "status",
+              "value": "eq.reserviert"
+            },
+            {
+              "name": "updated_at",
+              "value": "={{ 'lt.' + $json.grenze_utc }}"
+            },
+            {
+              "name": "externe_event_id",
+              "value": "is.null"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'abgelaufen', fehler_code: 'RESERVIERUNG_ABGELAUFEN', fehler_text: 'Automatisch freigegeben am ' + $now.toUTC().toISO() + ' (Ausführung ' + $execution.id + '): länger als ' + $('Terminkonfiguration').first().json.cfg.reservierung_ablauf_minuten + ' Minuten reserviert, nicht gebucht, kein Kalendereintrag.', updated_at: $now.toUTC().toISO() }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "2da095b9-7909-4e02-a1ec-cf946655b067",
+      "name": "Abgelaufene Reservierungen freigeben",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        -432
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Nur tatsächlich freigegebene Zeilen blockieren nicht mehr. Jede Freigabe und jeder unsichere Fall\n// bekommt eine Mitarbeiteraufgabe an der betroffenen Anfrage. Nicht freigegebene Zeilen blockieren weiter.\nconst K = $('Terminkonfiguration').first().json;\nconst tz = K.cfg.zeitzone;\nconst anzeige = s => DateTime.fromISO(String(s), { zone: 'utc' }).setZone(tz).setLocale('de').toFormat(\"cccc, dd.MM.yyyy 'um' HH:mm 'Uhr'\");\nconst P = $('Abgelaufene Reservierungen prüfen').first().json;\nconst r = $input.first().json;\nconst ok = r.statusCode >= 200 && r.statusCode < 300 && Array.isArray(r.body);\nconst freigegeben = ok ? r.body.filter(z => z.status === 'abgelaufen').map(z => z.id) : [];\nconst minuten = K.cfg.reservierung_ablauf_minuten;\nconst stand = ' (Stand ' + new Date().toISOString() + ')';\nconst aufgabe = (z, titel, text) => ({\n  betrieb_id: K.betrieb_id, anfrage_db_id: z.anfrage_db_id, typ: 'termin_pruefen',\n  titel: 'Terminassistent: ' + titel, beschreibung: (text + stand).slice(0, 2000),\n  prioritaet: 'hoch', status: 'offen', freigabe_erforderlich: true, termin_status: 'mitarbeiterpruefung', termin_id: z.id\n});\nconst aufgaben = [];\nfor (const z of P.sicher.filter(z => freigegeben.includes(z.id))) {\n  aufgaben.push(aufgabe(z, 'Reservierung abgelaufen und freigegeben – Kunde bitte kontaktieren',\n    'Termin ' + z.id + ' (' + anzeige(z.start_at) + ') war länger als ' + minuten + ' Minuten reserviert, ohne Buchung und ohne Kalendereintrag. Er wurde automatisch freigegeben (Status „abgelaufen“). Der Kunde hat keine Buchungsbestätigung erhalten.'));\n}\nfor (const z of P.unsicher) {\n  aufgaben.push(aufgabe(z, 'Abgelaufene Reservierung mit möglichem Kalendereintrag – bitte prüfen',\n    'Termin ' + z.id + ' (' + anzeige(z.start_at) + ') ist länger als ' + minuten + ' Minuten reserviert und nicht gebucht, aber ' + (z.externe_event_id ? 'ein Kalendereintrag ist verknüpft' : 'im selben Zeitraum steht ein Kalendereintrag') + '. Keine automatische Änderung: Der Termin bleibt blockiert, Kalender und Buchung bitte manuell prüfen.'));\n}\nconst eindeutig = [...new Map(aufgaben.map(a => [a.anfrage_db_id, a])).values()];\nconst daten = {\n  kalender_belegt: P.kalender_belegt,\n  db_belegt: P.db_belegt.filter(z => !freigegeben.includes(z.id)),\n  freigabe: { freigegeben, unsicher: P.unsicher.map(z => z.id), nicht_freigegeben: P.sicher.filter(z => !freigegeben.includes(z.id)).map(z => z.id), http_status: r.statusCode }\n};\nif (!eindeutig.length) return [{ json: Object.assign({ weiter: 'termine_berechnen' }, daten) }];\nreturn [{ json: Object.assign({ weiter: 'freigabe_aufgaben', aufgaben: eindeutig, anfragen_ids: eindeutig.map(a => a.anfrage_db_id) }, daten) }];\n"
+      },
+      "id": "3f4c4eac-1a71-4795-9067-3c156ab3a16f",
+      "name": "Freigabe auswerten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        -432
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Terminkonfiguration').first().json.supabase_url }}/rest/v1/aufgaben?on_conflict=anfrage_db_id,typ",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.aufgaben) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "5b861690-f980-42b6-a432-79b1620e201a",
+      "name": "Freigabe: Mitarbeiteraufgaben anlegen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        -624
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Terminkonfiguration').first().json.supabase_url }}/rest/v1/anfragen",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "id",
+              "value": "={{ 'in.(' + $('Freigabe auswerten').first().json.anfragen_ids.join(',') + ')' }}"
+            },
+            {
+              "name": "betrieb_id",
+              "value": "={{ 'eq.' + $('Terminkonfiguration').first().json.betrieb_id }}"
+            },
+            {
+              "name": "or",
+              "value": "(termin_status.is.null,termin_status.neq.gebucht)"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ termin_status: 'mitarbeiterpruefung', updated_at: $now.toUTC().toISO() }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "8bc21805-35e1-456f-8483-f103d0676cee",
+      "name": "Freigabe: Anfragestatus setzen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        896,
+        -624
+      ],
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aufgaben und Anfragestatus sind der Nachweis der Freigabe. Scheitern sie, bleibt die Freigabe am Termin selbst\n// (Status, fehler_code, fehler_text) nachvollziehbar; unsichere Fälle werden beim nächsten Lauf erneut gemeldet.\nconst F = $('Freigabe auswerten').first().json;\nconst ok = x => Boolean(x) && x.statusCode >= 200 && x.statusCode < 300;\nconst aufgaben = $('Freigabe: Mitarbeiteraufgaben anlegen').first().json;\nconst anfragen = $input.first().json;\nreturn [{ json: { weiter: 'termine_berechnen', kalender_belegt: F.kalender_belegt, db_belegt: F.db_belegt,\n  freigabe: Object.assign({}, F.freigabe, { aufgaben_gespeichert: ok(aufgaben), anfragestatus_gespeichert: ok(anfragen) }) } }];\n"
+      },
+      "id": "b8d2641b-fa07-4438-a65e-faa9e3f86a84",
+      "name": "Freigabe abschließen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1120,
+        -624
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Terminkonfiguration').first().json.supabase_url }}/rest/v1/termine",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "id",
+              "value": "={{ 'in.(' + $json.ablehnung_ids.join(',') + ')' }}"
+            },
+            {
+              "name": "betrieb_id",
+              "value": "={{ 'eq.' + $('Terminkonfiguration').first().json.betrieb_id }}"
+            },
+            {
+              "name": "anfrage_db_id",
+              "value": "={{ 'eq.' + $('Terminkonfiguration').first().json.anfrage.anfrage_db_id }}"
+            },
+            {
+              "name": "status",
+              "value": "eq.vorgeschlagen"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'abgelehnt', kunden_bestaetigung: 'abgelehnt', updated_at: $now.toUTC().toISO() }) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "53fea6dc-df83-47cf-ae23-8052c750f5dd",
+      "name": "Vorschläge als abgelehnt markieren",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        672,
+        816
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Erst wenn die abgelehnten Vorschläge gespeichert sind, geht es weiter – sonst könnten sie erneut angeboten werden.\nconst W = $('Terminwahl erkennen').first().json;\nconst r = $input.first().json;\nif (!(r.statusCode >= 200 && r.statusCode < 300) || !Array.isArray(r.body) || r.body.length !== W.ablehnung_ids.length) {\n  throw new Error('Ablehnung der Terminvorschläge konnte nicht gespeichert werden (HTTP ' + r.statusCode + ')');\n}\nreturn [{ json: W.danach }];\n"
+      },
+      "id": "31fb85f3-781c-4e93-820e-cd533f3a6ea3",
+      "name": "Ablehnung auswerten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        896,
+        752
+      ],
+      "onError": "continueErrorOutput"
+    }
+  ],
+  "connections": {
+    "Aufruf durch Hauptworkflow": {
+      "main": [
+        [
+          {
+            "node": "Terminkonfiguration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Terminkonfiguration": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nächsten Schritt wählen": {
+      "main": [
+        [
+          {
+            "node": "Eignung prüfen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Belegte Termine lesen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Termine zur Anfrage lesen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Vorschläge speichern",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Termin reservieren",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Konflikt nachlesen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Kalender für Buchung wählen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mitarbeiterfall vorbereiten",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Mitarbeiteraufgabe anlegen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Terminstatus vorbereiten",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Terminstatus schreiben",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Antwort zurückgeben",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Kalenderaktion anfordern",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Termin verschieben (atomar)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Verschiebung protokollieren vorbereiten",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Termin als storniert speichern",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Termin direkt reservieren",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Termine berechnen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Abgelaufene Reservierungen freigeben",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Freigabe: Mitarbeiteraufgaben anlegen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Vorschläge als abgelehnt markieren",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Unbekannter Schritt",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Eignung prüfen": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Termine berechnen": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kalenderfehler melden": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buchungsfehler melden": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Datenbankfehler melden": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mitarbeiterfall vorbereiten": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mitarbeiteraufgabe prüfen": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Terminstatus vorbereiten": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Terminstatus prüfen": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Belegte Termine lesen": {
+      "main": [
+        [
+          {
+            "node": "Kalenderanbieter wählen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Datenbankfehler melden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kalenderanbieter wählen": {
+      "main": [
+        [
+          {
+            "node": "Testkalender lesen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Outlook-Kalender lesen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Testkalender lesen": {
+      "main": [
+        [
+          {
+            "node": "Kalenderbelegung prüfen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outlook-Kalender lesen": {
+      "main": [
+        [
+          {
+            "node": "Kalenderbelegung prüfen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Kalenderfehler melden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kalenderbelegung prüfen": {
+      "main": [
+        [
+          {
+            "node": "Abgelaufene Reservierungen prüfen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Kalenderfehler melden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Termine zur Anfrage lesen": {
+      "main": [
+        [
+          {
+            "node": "Terminwahl erkennen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Datenbankfehler melden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Terminwahl erkennen": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Datenbankfehler melden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vorschläge speichern": {
+      "main": [
+        [
+          {
+            "node": "Vorschläge prüfen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Datenbankfehler melden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vorschläge prüfen": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Datenbankfehler melden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Termin reservieren": {
+      "main": [
+        [
+          {
+            "node": "Reservierung auswerten",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Datenbankfehler melden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reservierung auswerten": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Datenbankfehler melden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Konflikt nachlesen": {
+      "main": [
+        [
+          {
+            "node": "Konflikt auswerten",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Datenbankfehler melden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Konflikt auswerten": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Datenbankfehler melden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kalender für Buchung wählen": {
+      "main": [
+        [
+          {
+            "node": "Testkalender: Eintrag anlegen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Outlook-Termin anlegen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Testkalender: Eintrag anlegen": {
+      "main": [
+        [
+          {
+            "node": "Kalendereintrag prüfen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outlook-Termin anlegen": {
+      "main": [
+        [
+          {
+            "node": "Kalendereintrag prüfen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reservierung als Fehler markieren",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kalendereintrag prüfen": {
+      "main": [
+        [
+          {
+            "node": "Termin als gebucht speichern",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Reservierung als Fehler markieren",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Reservierung als Fehler markieren": {
+      "main": [
+        [
+          {
+            "node": "Kalenderfehler melden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Termin als gebucht speichern": {
+      "main": [
+        [
+          {
+            "node": "Buchung abschließen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Buchungsfehler melden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Buchung abschließen": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Buchungsfehler melden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mitarbeiteraufgabe anlegen": {
+      "main": [
+        [
+          {
+            "node": "Mitarbeiteraufgabe prüfen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Terminstatus schreiben": {
+      "main": [
+        [
+          {
+            "node": "Terminstatus prüfen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kalenderaktion anfordern": {
+      "main": [
+        [
+          {
+            "node": "Kalenderaktion: Anbieter wählen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kalenderaktion: Anbieter wählen": {
+      "main": [
+        [
+          {
+            "node": "Testkalender: Aktion ausführen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Outlook-Aktion wählen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Testkalender: Aktion ausführen": {
+      "main": [
+        [
+          {
+            "node": "Kalenderaktion prüfen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outlook-Aktion wählen": {
+      "main": [
+        [
+          {
+            "node": "Outlook-Termin anlegen (Änderung)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Outlook-Termin löschen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outlook-Termin anlegen (Änderung)": {
+      "main": [
+        [
+          {
+            "node": "Kalenderaktion prüfen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Kalenderaktion fehlgeschlagen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Outlook-Termin löschen": {
+      "main": [
+        [
+          {
+            "node": "Kalenderaktion prüfen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Kalenderaktion fehlgeschlagen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kalenderaktion prüfen": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Kalenderaktion fehlgeschlagen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kalenderaktion fehlgeschlagen": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Termin verschieben (atomar)": {
+      "main": [
+        [
+          {
+            "node": "Verschiebung auswerten",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Verschiebung auswerten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verschiebung auswerten": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Datenbankfehler melden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verschiebung protokollieren vorbereiten": {
+      "main": [
+        [
+          {
+            "node": "Verschiebung protokollieren",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verschiebung protokollieren": {
+      "main": [
+        [
+          {
+            "node": "Verschiebung abschließen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Verschiebung abschließen": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Termin als storniert speichern": {
+      "main": [
+        [
+          {
+            "node": "Storno abschließen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Storno abschließen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Storno abschließen": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Termin direkt reservieren": {
+      "main": [
+        [
+          {
+            "node": "Reservierung auswerten",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Datenbankfehler melden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Abgelaufene Reservierungen prüfen": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Abgelaufene Reservierungen freigeben": {
+      "main": [
+        [
+          {
+            "node": "Freigabe auswerten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Freigabe auswerten": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Freigabe: Mitarbeiteraufgaben anlegen": {
+      "main": [
+        [
+          {
+            "node": "Freigabe: Anfragestatus setzen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Freigabe: Anfragestatus setzen": {
+      "main": [
+        [
+          {
+            "node": "Freigabe abschließen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Freigabe abschließen": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vorschläge als abgelehnt markieren": {
+      "main": [
+        [
+          {
+            "node": "Ablehnung auswerten",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Datenbankfehler melden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ablehnung auswerten": {
+      "main": [
+        [
+          {
+            "node": "Nächsten Schritt wählen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Datenbankfehler melden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Berlin",
+    "saveExecutionProgress": false,
+    "binaryMode": "separate"
+  },
+  "pinData": {},
+  "active": false
+}

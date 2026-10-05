@@ -1,0 +1,4690 @@
+{
+  "name": "AI Receptionist MVP – SHK",
+  "nodes": [
+    {
+      "parameters": {
+        "url": "={{ 'https://api.twilio.com/2010-04-01/Accounts/' + $('Betriebskonfiguration').first().json.betrieb.twilio_account_sid + '/Messages.json' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "To",
+              "value": "={{ 'whatsapp:' + $('Betriebskonfiguration').first().json.betrieb.whatsapp_absender }}"
+            },
+            {
+              "name": "PageSize",
+              "value": "50"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3b7c0b2c-22f5-41b6-bcc5-446536a27e19",
+      "name": "Twilio-Nachrichten abrufen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        -1168,
+        1024
+      ],
+      "retryOnFail": true,
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_TWILIO_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "messages",
+        "options": {}
+      },
+      "id": "260a7104-df5e-40c9-8499-ef5ab923950b",
+      "name": "WhatsApp-Nachrichten aufteilen",
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        -944,
+        1024
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "in-direction",
+              "leftValue": "={{ $json.direction }}",
+              "rightValue": "inbound",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            },
+            {
+              "id": "in-join",
+              "leftValue": "={{ String($json.body || '').trim().toLowerCase() }}",
+              "rightValue": "join ",
+              "operator": {
+                "type": "string",
+                "operation": "notStartsWith"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "5316d1cd-f63b-406a-9474-0eb23204085f",
+      "name": "Nur eingehende Nachrichten",
+      "type": "n8n-nodes-base.filter",
+      "typeVersion": 2.3,
+      "position": [
+        -720,
+        1024
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d282b4ae-646a-4c4f-be8f-130924b2890b",
+              "name": "quelle",
+              "value": "WhatsApp",
+              "type": "string"
+            },
+            {
+              "id": "d4984a93-fa90-4e75-9ee8-64f6cdaa8d69",
+              "name": "telefon",
+              "value": "={{ String($json.from || '').replace('whatsapp:', '').trim() }}",
+              "type": "string"
+            },
+            {
+              "id": "6e2c1d25-8362-4420-ba80-fa10b0873930",
+              "name": "nachricht",
+              "value": "={{ $json.body }}",
+              "type": "string"
+            },
+            {
+              "id": "6bdfbcdd-e121-4e5d-a628-3dfbf094831c",
+              "name": "name",
+              "value": "",
+              "type": "string"
+            },
+            {
+              "id": "73a87e75-f0d5-4136-939e-d63c4fdfb423",
+              "name": "message_sid",
+              "value": "={{ $json.sid }}",
+              "type": "string"
+            },
+            {
+              "id": "52bd1974-c982-4084-93a5-24a53f3f90d4",
+              "name": "wa_id",
+              "value": "={{ $json.from.replace('whatsapp:', '').replace('+', '') }}",
+              "type": "string"
+            },
+            {
+              "id": "10a1b47e-15ac-4887-a021-3173ce212c19",
+              "name": "anzahl_medien",
+              "value": "={{ Number($json.num_media || 0) }}",
+              "type": "string"
+            },
+            {
+              "id": "5819a309-af0e-4fb5-8c16-649f9a0bf3d3",
+              "name": "zeitpunkt",
+              "value": "={{ $json.date_created || $json.date_sent }}",
+              "type": "string"
+            },
+            {
+              "id": "d0f1a2bb-04ad-4d50-81b8-c70201a23618",
+              "name": "anfrage_id",
+              "value": "={{ $json.sid }}",
+              "type": "string"
+            },
+            {
+              "id": "19ab9767-dd34-48ac-8ea3-6eeb5a6d3cea",
+              "name": "technisches_anliegen",
+              "value": "={{ $json.body }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0028566c-9e15-453a-a665-f0b75d3254d8",
+      "name": "WhatsApp-API-Daten standardisieren",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        -496,
+        1024
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "anfragen",
+        "limit": 1,
+        "orderBy": "=letzte_nachricht_at.desc",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "telefon",
+              "condition": "eq",
+              "keyValue": "={{ ($json.telefon_normalisiert || $json.telefon || '').toString().replace('whatsapp:', '').trim() }}"
+            },
+            {
+              "keyName": "konversation_status",
+              "condition": "eq",
+              "keyValue": "offen"
+            },
+            {
+              "keyName": "letzte_nachricht_at",
+              "condition": "gte",
+              "keyValue": "={{ $now.minus({ hours: 24 }).toISO() }}"
+            },
+            {
+              "keyName": "betrieb_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Betriebskonfiguration').first().json.betrieb.betrieb_id }}"
+            }
+          ]
+        }
+      },
+      "id": "6dbe5f9d-8103-4811-89aa-7b613b642eb3",
+      "name": "Offene WhatsApp-Anfrage suchen",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        848,
+        1024
+      ],
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "15bac70c-e16e-4f94-b044-cb37a691f751",
+              "name": "bestehende_anfrage_db_id",
+              "value": "={{ $json.id || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "e6d625bb-e792-42a4-80e1-c4d9fc99dc86",
+              "name": "bestehende_anfrage_id",
+              "value": "={{ $json.anfrage_id || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "85fca649-472f-49b7-be3a-2299516ba9e9",
+              "name": "bisheriges_anliegen",
+              "value": "={{ $json.technisches_anliegen || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "19c0a2e8-b74b-4933-9f70-55b4c5615a16",
+              "name": "vorherige_nachricht_at",
+              "value": "={{ $json.letzte_nachricht_at || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "053aefb9-0194-481a-8f32-eb5e6858f56b",
+              "name": "bestehender_kunde_id",
+              "value": "={{ $json.kunde_id || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "ba-telefon",
+              "name": "bestehende_telefon",
+              "type": "string",
+              "value": "={{ String($json.telefon || '').trim() || '__kein_treffer__' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e736e7da-762a-4720-ba54-e3d5a73db1b4",
+      "name": "Bisherige Anfrage vorbereiten",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1072,
+        1024
+      ]
+    },
+    {
+      "parameters": {
+        "formTitle": "SHK-Serviceanfrage",
+        "formDescription": "Demoformular – bitte nur erfundene Testdaten verwenden.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Name",
+              "fieldName": "name",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Telefonnummer",
+              "fieldName": "telefon",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Postleitzahl",
+              "fieldName": "plz",
+              "placeholder": "5-stellig, z. B. 12345",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Ort",
+              "fieldName": "ort",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Adresse",
+              "fieldName": "adresse"
+            },
+            {
+              "fieldLabel": "Was können wir für Sie tun?",
+              "fieldType": "textarea",
+              "fieldName": "technisches_anliegen",
+              "requiredField": true
+            }
+          ]
+        },
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "0890bfc7-435b-4dcd-8e9b-9f6bc5b0a502",
+      "name": "Website-Anfrage – Demo",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.6,
+      "position": [
+        -1840,
+        2144
+      ],
+      "webhookId": "f4b83b3e-0ebd-4ef8-b396-0c815c1f3870",
+      "notes": "Demo-Eingang für Website-Anfragen. Öffentliches Formular „SHK-Serviceanfrage“ mit den Feldern Name, Telefonnummer, Ort, Adresse und technischem Anliegen. Dient ausschließlich Demozwecken – es sollen nur erfundene Testdaten eingegeben werden. Der manuelle Testweg bleibt davon unberührt."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "w-anfrage-id",
+              "name": "anfrage_id",
+              "type": "string",
+              "value": "={{ 'WEB-' + $execution.id }}"
+            },
+            {
+              "id": "w-quelle",
+              "name": "quelle",
+              "type": "string",
+              "value": "website"
+            },
+            {
+              "id": "w-name",
+              "name": "name",
+              "type": "string",
+              "value": "={{ $json.name }}"
+            },
+            {
+              "id": "w-telefon",
+              "name": "telefon",
+              "type": "string",
+              "value": "={{ $json.telefon }}"
+            },
+            {
+              "id": "w-ort",
+              "name": "ort",
+              "type": "string",
+              "value": "={{ $json.ort }}"
+            },
+            {
+              "id": "w-plz",
+              "name": "plz",
+              "type": "string",
+              "value": "={{ String($json.plz ?? '').trim() }}"
+            },
+            {
+              "id": "w-adresse",
+              "name": "adresse",
+              "type": "string",
+              "value": "={{ $json.adresse }}"
+            },
+            {
+              "id": "w-anliegen",
+              "name": "technisches_anliegen",
+              "type": "string",
+              "value": "={{ $json.technisches_anliegen }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d22ca0cf-6ebe-4fae-8251-a2449c7e65d9",
+      "name": "Website-Eingang standardisieren",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1520,
+        2640
+      ],
+      "notes": "Standardisiert eingehende Website-Formulardaten in dieselbe Feldstruktur wie der manuelle Testweg. Erzeugt anfrage_id (Präfix „WEB-“), setzt quelle fest auf „website“ und übernimmt Name, Telefonnummer, Ort, Adresse und technisches Anliegen als einfache Textwerte. „Include Other Input Fields“ ist deaktiviert, damit ausschließlich diese Felder weitergegeben werden."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "k-anfrage-id",
+              "name": "anfrage_id",
+              "type": "string",
+              "value": "={{ $json.anfrage_id || $json.message_sid || '' }}"
+            },
+            {
+              "id": "k-quelle",
+              "name": "quelle",
+              "type": "string",
+              "value": "={{ $json.quelle }}"
+            },
+            {
+              "id": "k-name",
+              "name": "name",
+              "type": "string",
+              "value": "={{ $json.name }}"
+            },
+            {
+              "id": "k-telefon",
+              "name": "telefon",
+              "type": "string",
+              "value": "={{ $json.telefon }}"
+            },
+            {
+              "id": "k-ort",
+              "name": "ort",
+              "type": "string",
+              "value": "={{ $json.ort }}"
+            },
+            {
+              "id": "k-plz",
+              "name": "plz",
+              "type": "string",
+              "value": "={{ String($json.plz ?? '').trim() }}"
+            },
+            {
+              "id": "k-adresse",
+              "name": "adresse",
+              "type": "string",
+              "value": "={{ $json.adresse }}"
+            },
+            {
+              "id": "2f0b8957-ff07-47fb-b021-f147433ec7fd",
+              "name": "technisches_anliegen",
+              "type": "string",
+              "value": "={{ $json.technisches_anliegen || $json.nachricht || '' }}"
+            },
+            {
+              "id": "86edd83b-ae40-445e-898a-0519dfc86440",
+              "name": "bestehende_anfrage_db_id",
+              "type": "string",
+              "value": "={{ $json.bestehende_anfrage_db_id || '' }}"
+            },
+            {
+              "id": "k-eingang",
+              "name": "eingang_ids",
+              "type": "string",
+              "value": "={{ String($json.message_sids || $json.eingang_ids || '').trim() }}"
+            },
+            {
+              "id": "kb-gefahren",
+              "name": "gefahren",
+              "type": "object",
+              "value": "={{ (() => { function gefahrenlage(roh){const N=String(roh||'').toLowerCase().replace(/ä/g,'ae').replace(/ö/g,'oe').replace(/ü/g,'ue').replace(/ß/g,'ss').replace(/\\s+/g,' ').trim();const Z={gas:'nicht_erwaehnt',wasser:'nicht_erwaehnt',brand:'nicht_erwaehnt',strom:'nicht_erwaehnt',dringend:'nicht_erwaehnt',versorgung:'nicht_erwaehnt'};const B=[];if(N){const T=N.split(/[.!?;:\\n]+|,| und | sowie | aber | jedoch | allerdings | dennoch | sondern | trotzdem | doch /).map(s=>s.trim()).filter(Boolean);const I={gas:/gasgeruch|gasaustritt|gasleck|gasverlust|\\bgas\\b|kohlenmonoxid|\\bco[- ]?(melder|warner)\\b|propan|fluessiggas|(gasleitung|gasrohr|gashahn|gastherme)\\s+(\\w+\\s+){0,3}(zischt|undicht|leckt|riecht|offen)|(zischt|riecht|pfeift)\\s+(\\w+\\s+){0,4}(gasleitung|gasrohr|gashahn)/,wasser:/wasseraustritt|wasserschaden|rohrbruch|ueberschwemm|ueberflut|\\bleck\\b|leckage|undicht|wasser im keller|pfuetze|(rohr|leitung|schlauch|ventil|therme|boiler|speicher|heizung)\\s+(\\w+\\s+){0,2}(geplatzt|gebrochen|gerissen|undicht|laeuft aus)|\\bwasser\\b\\s*(\\w+\\s+){0,2}(tritt|laeuft|spritzt|stroemt|sprudelt|steht|dringt)|(tritt|laeuft|spritzt|stroemt|sprudelt|steht|dringt)\\s+(\\w+\\s+){0,3}\\bwasser\\b|(nasse|nasser|nasses|feuchte|feuchter|feuchtes)\\s+(wand|waende|decke|boden|keller)|(wand|waende|decke|boden|keller|teppich|estrich)\\s+(\\w+\\s+){0,3}(feucht|nass|durchnaesst)/,brand:/brandgeruch|\\brauch\\b|rauchmelder|qualm|verbrannt|verschmort|schmor|\\bfeuer\\b|\\bbrennt\\b|\\bbrand\\b|funken|russ/,strom:/stromschlag|kurzschluss|kabelbrand|elektrischer schlag/};const D=/\\bnotfall\\b|\\bdringend\\b|\\bsofort\\b|\\beilt\\b|so schnell wie moeglich|\\bakut\\b|\\bumgehend\\b/;const V=/kein(e|en)? (heizung|warmwasser|warmes wasser)|(heizung|warmwasser) (ist |faellt )?(komplett )?(ausgefallen|aus)\\b|heizung geht nicht|warmwasser (geht|funktioniert) nicht/;const NEG=/^(kein|keine|keinen|keiner|keinem|keines|keinerlei|nicht|nichts|nie|niemals|ohne|weder|noch|frei|unauffaellig|negativ|trocken|dicht)$/;const U=/vielleicht|moeglicherweise|eventuell|\\bevtl\\b|unsicher|unklar|weiss (ich )?nicht|keine ahnung|kann ich nicht sagen|nicht sicher|ob (es|da|dort|irgendwo)|schwer zu sagen/;const H=/(nicht|nichts|niemand)\\s+(\\w+\\s+){0,3}(abstellen|abdrehen|zudrehen|absperren|abschalten|ausschalten|stoppen|schliessen|loeschen|erreichen|finden|beheben|stillen|aufhalten)|(abstellen|abdrehen|zudrehen|absperren|abschalten|ausschalten|stoppen|schliessen|loeschen|erreichen|finden|beheben|stillen|aufhalten)\\s+(\\w+\\s+){0,2}nicht\\b/;const TR=/(leitung|rohr|boden|waende|wand|decke|keller|stelle|alles|es|hier|dort)\\s+(ist |sind |bleibt |war |scheint |wirkt )?(komplett |voellig |ganz |wieder )?(trocken|dicht)\\b/;const R={nicht_erwaehnt:0,verneint:1,unklar:2,vorhanden:3};const setze=(art,wert,teil)=>{if(R[wert]>R[Z[art]]){Z[art]=wert;B.push(art+': '+wert+' ('+teil.slice(0,60)+')');} };const bewerte=(teil,tr)=>{if(H.test(teil))return 'vorhanden';if(U.test(teil))return 'unklar';const w=teil.split(' ');const i=teil.slice(0,tr.index).split(' ').length-1;const L=String(tr[0]||'').split(' ').length;for(let j=Math.max(0,i-4);j<Math.min(w.length,i+L+4);j++){if(NEG.test(String(w[j]||'').replace(/[^a-z]/g,'')))return 'verneint';}return 'vorhanden';};for(const teil of T){for(const art of ['gas','wasser','brand','strom']){const tr=I[art].exec(teil);if(tr)setze(art,bewerte(teil,tr),teil);}if(TR.test(teil)&&Z.wasser==='nicht_erwaehnt')setze('wasser','verneint',teil);const d=D.exec(teil);if(d)setze('dringend',bewerte(teil,d),teil);if(V.test(teil))setze('versorgung','vorhanden',teil);} }const arten=['gas','wasser','brand','strom'];const vor=arten.filter(a=>Z[a]==='vorhanden');const notfall=vor.length>0||Z.dringend==='vorhanden'||Z.versorgung==='vorhanden';return{gas:Z.gas,wasser:Z.wasser,brand:Z.brand,strom:Z.strom,dringend:Z.dringend,versorgung:Z.versorgung,notfall:notfall,unklar:arten.some(a=>Z[a]==='unklar'),notfall_art:vor.indexOf('gas')>=0?'gas':(vor.indexOf('wasser')>=0?'wasser':(notfall?'sonstig':'')),begruendung:B};} const g = gefahrenlage(String($json.technisches_anliegen || $json.nachricht || '')); return { gas_gefahr: g.gas, wasser_gefahr: g.wasser, brand_gefahr: g.brand, strom_gefahr: g.strom, dringend: g.dringend, versorgung_ausfall: g.versorgung, notfall: g.notfall, unklar: g.unklar, notfall_art: g.notfall_art, begruendung: g.begruendung }; })() }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "f0071dd2-38ad-4087-840c-bd7765500a04",
+      "name": "Kontaktdaten behalten",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1744,
+        1264
+      ],
+      "notes": "Weg A – Kontaktdaten: Behält ausschließlich anfrage_id, quelle, name, telefon, ort und adresse. Diese Daten werden NICHT an die KI übergeben, sondern erst nach der Auswertung über anfrage_id wieder zusammengeführt."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "m-anfrage-id",
+              "name": "anfrage_id",
+              "type": "string",
+              "value": "={{ $json.anfrage_id }}"
+            },
+            {
+              "id": "m-anliegen",
+              "name": "technisches_anliegen",
+              "type": "string",
+              "value": "={{\n(() => {\n  let text = String($json.technisches_anliegen || '');\n\n  const daten = [\n    $json.name,\n    $json.telefon,\n    $json.telefon_normalisiert,\n    $json.email,\n    $json.adresse,\n    $json.ort\n  ].filter(Boolean);\n\n  for (const wert of daten) {\n    const sicher = String(wert).replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');\n    text = text.replace(new RegExp(sicher, 'gi'), '[ENTFERNT]');\n  }\n\n  return text\n    .replace(\n      /[A-Z0-9._%+-]+@[A-Z0-9.-]+\\.[A-Z]{2,}/gi,\n      '[E-MAIL ENTFERNT]'\n    )\n    .replace(\n      /(?:\\+49|0049|0)[\\d\\s/()-]{7,}/g,\n      '[TELEFON ENTFERNT]'\n    )\n    .replace(\n      /\\b(?:mein Name ist|ich heiße)\\s+[\\p{L}-]+(?:\\s+[\\p{L}-]+)?/giu,\n      '[NAME ENTFERNT]'\n    )\n    .replace(\n      /\\b(?:[\\p{L}-]+(?:straße|strasse|str\\.?|weg|allee|platz|gasse)|(?:[\\p{L}-]+\\s+){1,3}(?:Straße|Strasse|Str\\.?|Weg|Allee|Platz|Gasse))\\s+\\d+[a-z]?\\b/giu,\n      '[ADRESSE ENTFERNT]'\n    )\n    .trim();\n})()\n}}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e6c8eeca-1daf-4022-b21a-c5c20be761e2",
+      "name": "KI-Eingabe minimieren",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1744,
+        2032
+      ],
+      "notes": "Weg B – KI-Eingabe: Enthält ausschließlich anfrage_id und technisches_anliegen. \"Include Other Input Fields\" ist deaktiviert, damit Name, Telefonnummer, Ort und Adresse NICHT an den AI-Node weitergegeben werden."
+    },
+    {
+      "parameters": {
+        "text": "=Anfrage-ID (nur unverändert übernehmen, nicht auswerten): {{ $json.anfrage_id }}\n\nZu analysierendes technisches Anliegen: {{ $json.technisches_anliegen }}",
+        "attributes": {
+          "attributes": [
+            {
+              "name": "anfrage_id",
+              "description": "Die Anfrage-ID unverändert und exakt übernehmen, z. B. \"TEST-001\". Nicht auswerten, nur kopieren.",
+              "required": true
+            },
+            {
+              "name": "kategorie",
+              "description": "Nur einer dieser Textwerte: \"Heizungsstörung\", \"Wasserschaden\", \"Wartung\", \"Neuinstallation\", \"Angebotsanfrage\", \"Sonstiges\". Rohrbruch, Wasseraustritt, geplatzte oder undichte Leitungen, Leckagen und Überschwemmungen sind immer \"Wasserschaden\", niemals \"Sonstiges\".",
+              "required": true
+            },
+            {
+              "name": "hersteller",
+              "description": "Hersteller des Geräts, z. B. Vaillant. Wenn nicht genannt: \"Unbekannt\".",
+              "required": true
+            },
+            {
+              "name": "geraet",
+              "description": "Art des Geräts, z. B. Heizung. Wenn nicht genannt: \"Unbekannt\".",
+              "required": true
+            },
+            {
+              "name": "fehlercode",
+              "description": "Genannter Fehlercode, z. B. F28. Wenn nicht genannt: \"Unbekannt\".",
+              "required": true
+            },
+            {
+              "name": "warmwasser",
+              "description": "Ob Warmwasser verfügbar ist. Nur einer der Textwerte: \"Ja\", \"Nein\" oder \"Unbekannt\".",
+              "required": true
+            },
+            {
+              "name": "dringlichkeit",
+              "description": "Nur einer dieser Textwerte: \"niedrig\", \"normal\", \"hoch\", \"notfall\". Akuter Wasseraustritt, Rohrbruch oder Überschwemmung ist immer \"notfall\".",
+              "required": true
+            },
+            {
+              "name": "fehlende_informationen",
+              "description": "Normaler Text (keine Liste, kein Objekt) mit fehlenden Angaben, durch Kommas getrennt. Wenn nichts fehlt: \"Unbekannt\".",
+              "required": true
+            }
+          ]
+        },
+        "options": {
+          "systemPromptTemplate": "Du bist ein Assistent für einen SHK-Betrieb (Sanitär, Heizung, Klima). Werte ausschließlich das Feld \"technisches_anliegen\" aus. Die \"anfrage_id\" ist nur ein technischer Bezeichner: übernimm sie unverändert und werte sie nicht aus. Erfinde keine Informationen, Diagnosen, Preise oder Termine. Wenn eine Information nicht genannt wird, verwende den Text \"Unbekannt\". Für \"warmwasser\" verwende ausschließlich \"Ja\", \"Nein\" oder \"Unbekannt\". Für \"kategorie\" verwende ausschließlich einen der Werte: Heizungsstörung, Wasserschaden, Wartung, Neuinstallation, Angebotsanfrage, Sonstiges. Für \"dringlichkeit\" verwende ausschließlich: niedrig, normal, hoch, notfall. Alle Ergebnisse sind einfache Textwerte – keine Listen und keine Objekte. \"fehlende_informationen\" ist ein normaler Text, mehrere Angaben werden durch Kommas getrennt."
+        }
+      },
+      "id": "261c5a70-c4a8-44cf-9ee5-1a9ce06fd3b4",
+      "name": "Anfrage mit KI analysieren",
+      "type": "@n8n/n8n-nodes-langchain.informationExtractor",
+      "typeVersion": 1.2,
+      "position": [
+        1968,
+        2032
+      ],
+      "retryOnFail": true,
+      "onError": "continueRegularOutput",
+      "notes": "Weg B – KI-Auswertung: Wertet ausschließlich \"technisches_anliegen\" aus und erzeugt nur einfache Textfelder (anfrage_id, kategorie, hersteller, geraet, fehlercode, warmwasser, dringlichkeit, fehlende_informationen). Erhält niemals Name, Telefon, Ort oder Adresse."
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-5-mini"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "id": "cbceed17-aedb-42aa-aa3a-844d7db7ecc4",
+      "name": "OpenAI Modell – Analyse",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        2040,
+        2248
+      ],
+      "notes": "Stellt das Sprachmodell für die Analyse bereit. Erhält ausschließlich anfrage_id und technisches_anliegen – niemals Name, Telefon, Ort oder Adresse.",
+      "credentials": {
+        "openAiApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_OPENAI_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vapi-anfrage",
+        "options": {}
+      },
+      "id": "84e11a8b-479b-463b-92d5-4d6a2abfb2ed",
+      "name": "Vapi-Telefonassistent",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1840,
+        1952
+      ],
+      "webhookId": "2bb310e7-fe6e-419f-ab5a-5ae148255a5a"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "277fecc1-a707-4660-b2bc-6e4fab4c2810",
+              "leftValue": "={{ $json.body.message.type }}",
+              "rightValue": "end-of-call-report",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "0c9e7074-d62c-4748-9979-31bea0968505",
+      "name": "Ist Abschlussbericht?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        -720,
+        1312
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 10
+      },
+      "id": "b900ca54-731e-46c8-b21e-8b433b8e3afa",
+      "name": "Auf Structured Output warten",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        176,
+        1312
+      ],
+      "webhookId": "bd34e2a6-e11d-4295-94da-f44cdb8bbbac"
+    },
+    {
+      "parameters": {
+        "url": "={{ 'https://api.vapi.ai/call/' + $('Ist Abschlussbericht?').first().json.body.message.call.id }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "options": {}
+      },
+      "id": "bc10e541-d574-413e-82c5-7d1cade213bf",
+      "name": "Vapi-Call abrufen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        400,
+        1312
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_VAPI_API_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ JSON.stringify((() => {\n  function gefahrenlage(roh){const N=String(roh||'').toLowerCase().replace(/ä/g,'ae').replace(/ö/g,'oe').replace(/ü/g,'ue').replace(/ß/g,'ss').replace(/\\s+/g,' ').trim();const Z={gas:'nicht_erwaehnt',wasser:'nicht_erwaehnt',brand:'nicht_erwaehnt',strom:'nicht_erwaehnt',dringend:'nicht_erwaehnt',versorgung:'nicht_erwaehnt'};const B=[];if(N){const T=N.split(/[.!?;:\\n]+|,| und | sowie | aber | jedoch | allerdings | dennoch | sondern | trotzdem | doch /).map(s=>s.trim()).filter(Boolean);const I={gas:/gasgeruch|gasaustritt|gasleck|gasverlust|\\bgas\\b|kohlenmonoxid|\\bco[- ]?(melder|warner)\\b|propan|fluessiggas|(gasleitung|gasrohr|gashahn|gastherme)\\s+(\\w+\\s+){0,3}(zischt|undicht|leckt|riecht|offen)|(zischt|riecht|pfeift)\\s+(\\w+\\s+){0,4}(gasleitung|gasrohr|gashahn)/,wasser:/wasseraustritt|wasserschaden|rohrbruch|ueberschwemm|ueberflut|\\bleck\\b|leckage|undicht|wasser im keller|pfuetze|(rohr|leitung|schlauch|ventil|therme|boiler|speicher|heizung)\\s+(\\w+\\s+){0,2}(geplatzt|gebrochen|gerissen|undicht|laeuft aus)|\\bwasser\\b\\s*(\\w+\\s+){0,2}(tritt|laeuft|spritzt|stroemt|sprudelt|steht|dringt)|(tritt|laeuft|spritzt|stroemt|sprudelt|steht|dringt)\\s+(\\w+\\s+){0,3}\\bwasser\\b|(nasse|nasser|nasses|feuchte|feuchter|feuchtes)\\s+(wand|waende|decke|boden|keller)|(wand|waende|decke|boden|keller|teppich|estrich)\\s+(\\w+\\s+){0,3}(feucht|nass|durchnaesst)/,brand:/brandgeruch|\\brauch\\b|rauchmelder|qualm|verbrannt|verschmort|schmor|\\bfeuer\\b|\\bbrennt\\b|\\bbrand\\b|funken|russ/,strom:/stromschlag|kurzschluss|kabelbrand|elektrischer schlag/};const D=/\\bnotfall\\b|\\bdringend\\b|\\bsofort\\b|\\beilt\\b|so schnell wie moeglich|\\bakut\\b|\\bumgehend\\b/;const V=/kein(e|en)? (heizung|warmwasser|warmes wasser)|(heizung|warmwasser) (ist |faellt )?(komplett )?(ausgefallen|aus)\\b|heizung geht nicht|warmwasser (geht|funktioniert) nicht/;const NEG=/^(kein|keine|keinen|keiner|keinem|keines|keinerlei|nicht|nichts|nie|niemals|ohne|weder|noch|frei|unauffaellig|negativ|trocken|dicht)$/;const U=/vielleicht|moeglicherweise|eventuell|\\bevtl\\b|unsicher|unklar|weiss (ich )?nicht|keine ahnung|kann ich nicht sagen|nicht sicher|ob (es|da|dort|irgendwo)|schwer zu sagen/;const H=/(nicht|nichts|niemand)\\s+(\\w+\\s+){0,3}(abstellen|abdrehen|zudrehen|absperren|abschalten|ausschalten|stoppen|schliessen|loeschen|erreichen|finden|beheben|stillen|aufhalten)|(abstellen|abdrehen|zudrehen|absperren|abschalten|ausschalten|stoppen|schliessen|loeschen|erreichen|finden|beheben|stillen|aufhalten)\\s+(\\w+\\s+){0,2}nicht\\b/;const TR=/(leitung|rohr|boden|waende|wand|decke|keller|stelle|alles|es|hier|dort)\\s+(ist |sind |bleibt |war |scheint |wirkt )?(komplett |voellig |ganz |wieder )?(trocken|dicht)\\b/;const R={nicht_erwaehnt:0,verneint:1,unklar:2,vorhanden:3};const setze=(art,wert,teil)=>{if(R[wert]>R[Z[art]]){Z[art]=wert;B.push(art+': '+wert+' ('+teil.slice(0,60)+')');} };const bewerte=(teil,tr)=>{if(H.test(teil))return 'vorhanden';if(U.test(teil))return 'unklar';const w=teil.split(' ');const i=teil.slice(0,tr.index).split(' ').length-1;const L=String(tr[0]||'').split(' ').length;for(let j=Math.max(0,i-4);j<Math.min(w.length,i+L+4);j++){if(NEG.test(String(w[j]||'').replace(/[^a-z]/g,'')))return 'verneint';}return 'vorhanden';};for(const teil of T){for(const art of ['gas','wasser','brand','strom']){const tr=I[art].exec(teil);if(tr)setze(art,bewerte(teil,tr),teil);}if(TR.test(teil)&&Z.wasser==='nicht_erwaehnt')setze('wasser','verneint',teil);const d=D.exec(teil);if(d)setze('dringend',bewerte(teil,d),teil);if(V.test(teil))setze('versorgung','vorhanden',teil);} }const arten=['gas','wasser','brand','strom'];const vor=arten.filter(a=>Z[a]==='vorhanden');const notfall=vor.length>0||Z.dringend==='vorhanden'||Z.versorgung==='vorhanden';return{gas:Z.gas,wasser:Z.wasser,brand:Z.brand,strom:Z.strom,dringend:Z.dringend,versorgung:Z.versorgung,notfall:notfall,unklar:arten.some(a=>Z[a]==='unklar'),notfall_art:vor.indexOf('gas')>=0?'gas':(vor.indexOf('wasser')>=0?'wasser':(notfall?'sonstig':'')),begruendung:B};}\n  const so = Object.values($json.artifact?.structuredOutputs || {}).map(o => o && o.result).find(r => r && typeof r === 'object' && Object.keys(r).length > 0);\n  const sd = $json.analysis?.structuredData;\n  const daten = so || ((sd && typeof sd === 'object' && Object.keys(sd).length > 0) ? sd : null);\n  const bericht = $('Ist Abschlussbericht?').first().json.body?.message || {};\n  const zusammenfassung = String($json.analysis?.summary || $json.summary || bericht.analysis?.summary || bericht.summary || '').trim();\n  const t = (v) => String(v ?? '').trim();\n  const r = daten || {};\n  const anliegen = t(r.technisches_anliegen) || (zusammenfassung ? (daten ? zusammenfassung : '[Aus Anrufzusammenfassung – keine strukturierten Anrufdaten] ' + zusammenfassung) : '');\n  return {\n    anfrage_id: t($json.id || bericht.call?.id),\n    quelle: 'Telefon',\n    eingang_ids: t($json.id || bericht.call?.id),\n    name: t(r.name),\n    telefon: t(r.telefon) || t($json.customer?.number || bericht.customer?.number),\n    ort: t(r.ort),\n    // Die PLZ kommt ausschliesslich aus dem eigenen Feld des Structured Output und wird nie\n    // aus der Adresse abgeleitet. Fehlt das Feld, bleibt sie leer und ueberschreibt nichts.\n    plz: /^\\d{5}$/.test(t(r.plz)) ? t(r.plz) : '',\n    adresse: t(r.adresse),\n    technisches_anliegen: anliegen,\n    // Gefahrenbewertung je Art, damit auch Telefonberichte Verneinungen richtig einordnen.\n    gefahren: (() => { const gg = gefahrenlage(anliegen); return { gas_gefahr: gg.gas, wasser_gefahr: gg.wasser, brand_gefahr: gg.brand, strom_gefahr: gg.strom, dringend: gg.dringend, versorgung_ausfall: gg.versorgung, notfall: gg.notfall, unklar: gg.unklar, notfall_art: gg.notfall_art, begruendung: gg.begruendung }; })(),\n    vapi_datenquelle: daten ? 'strukturiert' : (zusammenfassung ? 'zusammenfassung' : 'keine'),\n    output: r\n  };\n})()) }}",
+        "options": {}
+      },
+      "id": "fe513bd6-a63e-4f07-9e1b-6863ff878276",
+      "name": "Vapi-Daten standardisieren",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        624,
+        1312
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "v-anfrage-id",
+              "name": "anfrage_id",
+              "type": "string",
+              "value": "={{ String($json.anfrage_id ?? '').trim() }}"
+            },
+            {
+              "id": "v-quelle",
+              "name": "quelle",
+              "type": "string",
+              "value": "={{ String($json.quelle ?? '').trim() }}"
+            },
+            {
+              "id": "v-name",
+              "name": "name",
+              "type": "string",
+              "value": "={{ String($json.name ?? '').trim() }}"
+            },
+            {
+              "id": "v-telefon",
+              "name": "telefon",
+              "type": "string",
+              "value": "={{ String($json.telefon ?? '').trim() }}"
+            },
+            {
+              "id": "v-ort",
+              "name": "ort",
+              "type": "string",
+              "value": "={{ String($json.ort ?? '').trim() }}"
+            },
+            {
+              "id": "v-plz",
+              "name": "plz",
+              "type": "string",
+              "value": "={{ /^\\d{5}$/.test(String($json.plz ?? '').trim()) ? String($json.plz ?? '').trim() : '' }}"
+            },
+            {
+              "id": "v-adresse",
+              "name": "adresse",
+              "type": "string",
+              "value": "={{ String($json.adresse ?? '').trim() }}"
+            },
+            {
+              "id": "f-kategorie",
+              "name": "kategorie",
+              "type": "string",
+              "value": "={{ (() => { const g = ($json.gefahren && typeof $json.gefahren === 'object') ? $json.gefahren : {};\nconst erlaubt = ['Heizungsstörung','Wasserschaden','Wartung','Neuinstallation','Angebotsanfrage','Sonstiges'];\nconst roh = String($json.output?.kategorie ?? '').trim();\nconst k = erlaubt.find(e => e.toLowerCase() === roh.toLowerCase()) || 'Sonstiges';\nif (g.wasser_gefahr === 'vorhanden') return 'Wasserschaden';\nif (k === 'Wasserschaden' && g.wasser_gefahr === 'verneint') return 'Sonstiges';\nreturn k; })() }}"
+            },
+            {
+              "id": "f-hersteller",
+              "name": "hersteller",
+              "type": "string",
+              "value": "={{ String($json.output?.hersteller ?? '').trim() || 'Unbekannt' }}"
+            },
+            {
+              "id": "f-geraet",
+              "name": "geraet",
+              "type": "string",
+              "value": "={{ String($json.output?.geraet ?? '').trim() || 'Unbekannt' }}"
+            },
+            {
+              "id": "f-fehlercode",
+              "name": "fehlercode",
+              "type": "string",
+              "value": "={{ String($json.output?.fehlercode ?? '').trim() || 'Unbekannt' }}"
+            },
+            {
+              "id": "f-warmwasser",
+              "name": "warmwasser",
+              "type": "string",
+              "value": "={{ (() => { const v = $json.output?.warmwasser; if (v === true) return 'Ja'; if (v === false) return 'Nein'; const s = String(v ?? '').trim().toLowerCase(); if (['ja','true'].includes(s)) return 'Ja'; if (['nein','false'].includes(s)) return 'Nein'; return 'Unbekannt'; })() }}"
+            },
+            {
+              "id": "f-dringlichkeit",
+              "name": "dringlichkeit",
+              "type": "string",
+              "value": "={{ (() => { const g = ($json.gefahren && typeof $json.gefahren === 'object') ? $json.gefahren : {};\nconst s = String($json.output?.dringlichkeit ?? '').trim().toLowerCase();\nconst basis = ['niedrig','normal','hoch','notfall'].includes(s) ? s : 'normal';\nif (g.notfall === true) return 'notfall';\nconst verneint = ['gas_gefahr','wasser_gefahr','brand_gefahr','strom_gefahr'].some(x => g[x] === 'verneint');\nif (basis === 'notfall' && verneint && g.unklar !== true) return 'hoch';\nreturn basis; })() }}"
+            },
+            {
+              "id": "f-fehlende",
+              "name": "fehlende_informationen",
+              "type": "string",
+              "value": "={{ (() => {\nconst o = $json.output;\nconst t = (v) => String(v ?? '').trim();\nconst da = { name: t($json.name), telefon: t($json.telefon), plz: t($json.plz), ort: t($json.ort), adresse: t($json.adresse) };\nlet eintraege = [];\nif (!o || typeof o !== 'object' || Object.keys(o).length === 0) { eintraege = ['KI-Analyse nicht verfügbar – Anliegen bitte manuell prüfen']; }\nelse {\n  const v = o.fehlende_informationen;\n  const text = (Array.isArray(v) ? v.join(', ') : String(v ?? '')).trim();\n  eintraege = text.split(/[,;]+/).map(s => s.trim()).filter(Boolean)\n    .filter(e => !/^(keine?|unbekannt|-|–|n\\/a)$/i.test(e))\n    .filter(e => { const s = e.toLowerCase();\n      if (da.name && /\\bname\\b|kundenname|ansprechpartner|kontaktperson/.test(s)) return false;\n      if (da.telefon && /telefon|rufnummer|handy|mobil|kontaktdaten|erreichbar/.test(s)) return false;\n      if (da.adresse && /adresse|anschrift|stra(ß|ss)e|hausnummer/.test(s)) return false;\n      if (da.plz && /plz|postleit/.test(s)) return false;\n      if (da.ort && /\\bort\\b|stadt|wohnort/.test(s)) return false;\n      return true; });\n}\nlet s = eintraege.length ? eintraege.join(', ') : 'keine';\nconst plz = t($json.plz);\nif (String($json.quelle ?? '').trim() === 'website' && !/^\\d{5}$/.test(plz)) { s = (s === 'keine' ? '' : s + ', ') + (plz ? 'Postleitzahl ungültig (nicht fünfstellig)' : 'Postleitzahl fehlt'); }\nreturn s; })() }}"
+            },
+            {
+              "id": "89d60dc8-1d0c-43ea-9d9d-2874051bd8d9",
+              "name": "telefon_normalisiert",
+              "type": "string",
+              "value": "={{ (() => {\n  const raw = String($json.telefon ?? '').trim();\n  const digits = raw.replace(/\\D/g, '');\n  if (!digits) return '';\n  if (raw.startsWith('+')) return '+' + digits;\n  if (digits.startsWith('00')) return '+' + digits.slice(2);\n  if (digits.startsWith('0')) return '+49' + digits.slice(1);\n  if (digits.startsWith('49')) return '+' + digits;\n  return '+49' + digits;\n})() }}"
+            },
+            {
+              "id": "fff2842d-1012-4680-b1a7-43f31cea9e57",
+              "name": "technisches_anliegen",
+              "type": "string",
+              "value": "={{ String($json.output?.technisches_anliegen || $json.technisches_anliegen || '').trim() }}"
+            },
+            {
+              "id": "2e79184f-711a-42f4-8efc-6625792277b4",
+              "name": "bestehende_anfrage_db_id",
+              "type": "string",
+              "value": "={{ String($json.bestehende_anfrage_db_id || '').trim() }}"
+            },
+            {
+              "id": "v-eingang",
+              "name": "eingang_ids",
+              "type": "string",
+              "value": "={{ String($json.eingang_ids || '').trim() }}"
+            },
+            {
+              "id": "dv-gefahren",
+              "name": "gefahren",
+              "type": "object",
+              "value": "={{ ($json.gefahren && typeof $json.gefahren === 'object') ? $json.gefahren : { gas_gefahr: 'nicht_erwaehnt', wasser_gefahr: 'nicht_erwaehnt', brand_gefahr: 'nicht_erwaehnt', strom_gefahr: 'nicht_erwaehnt', dringend: 'nicht_erwaehnt', versorgung_ausfall: 'nicht_erwaehnt', notfall: false, unklar: false, notfall_art: '', begruendung: [] } }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "739a7103-0c8f-41ed-a6bf-afc09eb1fecc",
+      "name": "Daten vereinheitlichen",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        2544,
+        1408
+      ],
+      "notes": "Führt erst nach dem Merge Kontaktdaten und KI-Ergebnis in einfache Textfelder zusammen, damit der Switch direkt auf das Textfeld \"kategorie\" zugreifen kann. Übernimmt zusätzlich die Herkunft der Anfrage (quelle)."
+    },
+    {
+      "parameters": {
+        "operation": "getAll",
+        "tableId": "kunden",
+        "limit": 1,
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "betrieb_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Betriebskonfiguration').first().json.betrieb.betrieb_id }}"
+            },
+            {
+              "keyName": "telefon_normalisiert",
+              "condition": "eq",
+              "keyValue": "={{ String($json.telefon_normalisiert || '').trim() || '__ohne_telefonnummer__' }}"
+            }
+          ]
+        }
+      },
+      "id": "b8322e9b-e402-41db-9a09-a18c6b2ea163",
+      "name": "Kunde suchen",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        2768,
+        1344
+      ],
+      "alwaysOutputData": true,
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "f38aed34-9863-496a-a219-28485c10760d",
+              "leftValue": "={{ String($json.kunde_id || '') !== '' || String($json.telefon_normalisiert || '').trim() === '' }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "b3477174-618d-4a0c-a7e3-ede9e1d69b0f",
+      "name": "Kunde vorhanden?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        3440,
+        1408
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ JSON.stringify(Object.assign({}, $('Kunde vorhanden?').item.json, { kunde_id: $json.kunde_id || $json.id || null })) }}",
+        "options": {}
+      },
+      "id": "f12cbc45-4407-4cc8-8a31-53cb4f2fe68c",
+      "name": "Kunden-ID vereinheitlichen",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        3888,
+        1408
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "9e633032-8d83-4782-a9ca-8817ec2b43d6",
+              "leftValue": "={{ Boolean($json.bestehende_anfrage_db_id) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "e72307b7-a832-493d-aa52-0f53ead92254",
+      "name": "Bestehende Anfrage?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        4112,
+        1408
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "anfragen",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "id",
+              "condition": "eq",
+              "keyValue": "={{ $json.bestehende_anfrage_db_id }}"
+            },
+            {
+              "keyName": "betrieb_id",
+              "condition": "eq",
+              "keyValue": "={{ $('Betriebskonfiguration').first().json.betrieb.betrieb_id }}"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "technisches_anliegen",
+              "fieldValue": "={{ $json.technisches_anliegen || ($json.alt || {}).technisches_anliegen || '' }}"
+            },
+            {
+              "fieldId": "kategorie",
+              "fieldValue": "={{ $json.kategorie || ($json.alt || {}).kategorie || 'Sonstiges' }}"
+            },
+            {
+              "fieldId": "hersteller",
+              "fieldValue": "={{ (String($json.hersteller || '') !== 'Unbekannt' ? $json.hersteller : '') || ($json.alt || {}).hersteller || 'Unbekannt' }}"
+            },
+            {
+              "fieldId": "geraet",
+              "fieldValue": "={{ (String($json.geraet || '') !== 'Unbekannt' ? $json.geraet : '') || ($json.alt || {}).geraet || 'Unbekannt' }}"
+            },
+            {
+              "fieldId": "fehlercode",
+              "fieldValue": "={{ (String($json.fehlercode || '') !== 'Unbekannt' ? $json.fehlercode : '') || ($json.alt || {}).fehlercode || 'Unbekannt' }}"
+            },
+            {
+              "fieldId": "warmwasser",
+              "fieldValue": "={{ (String($json.warmwasser || '') !== 'Unbekannt' ? $json.warmwasser : '') || ($json.alt || {}).warmwasser || 'Unbekannt' }}"
+            },
+            {
+              "fieldId": "dringlichkeit",
+              "fieldValue": "={{ $json.dringlichkeit || ($json.alt || {}).dringlichkeit || 'normal' }}"
+            },
+            {
+              "fieldId": "fehlende_informationen",
+              "fieldValue": "={{ $json.fehlende_informationen || ($json.alt || {}).fehlende_informationen || 'keine' }}"
+            },
+            {
+              "fieldId": "telefon",
+              "fieldValue": "={{ $json.telefon_normalisiert || $json.telefon || ($json.alt || {}).telefon || '' }}"
+            },
+            {
+              "fieldId": "plz",
+              "fieldValue": "={{ (/^\\d{5}$/.test(String($json.plz || '')) ? String($json.plz) : '') || ($json.alt || {}).plz || null }}"
+            },
+            {
+              "fieldId": "kunde_id",
+              "fieldValue": "={{ $json.kunde_id || ($json.alt || {}).kunde_id || null }}"
+            },
+            {
+              "fieldId": "letzte_nachricht_at",
+              "fieldValue": "={{ $now.toISO() }}"
+            },
+            {
+              "fieldId": "updated_at",
+              "fieldValue": "={{ $now.toISO() }}"
+            }
+          ]
+        }
+      },
+      "id": "988e6604-d4b8-41e8-b526-58c6a880ade0",
+      "name": "Anfrage ergänzen",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        4336,
+        1312
+      ],
+      "retryOnFail": false,
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "tableId": "aufgaben",
+        "matchType": "allFilters",
+        "filters": {
+          "conditions": [
+            {
+              "keyName": "anfrage_db_id",
+              "condition": "eq",
+              "keyValue": "={{ $json.id }}"
+            },
+            {
+              "keyName": "typ",
+              "condition": "eq",
+              "keyValue": "anfrage_pruefen"
+            }
+          ]
+        },
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "titel",
+              "fieldValue": "={{ ((String($json.dringlichkeit || '').toLowerCase() === 'notfall' || $json.kategorie === 'Wasserschaden') ? '🚨 NOTFALL: ' : 'Aktualisierte Anfrage: ') + ($json.kategorie || 'Sonstiges') }}"
+            },
+            {
+              "fieldId": "beschreibung",
+              "fieldValue": "={{ (() => {\n  const basis = 'Anfrage ' + $json.anfrage_id + ' über ' + $json.quelle + ': ' + $json.technisches_anliegen;\n  let alt = {};\n  try { alt = ($('Bestehenden Vorgang übernehmen').item.json || {}).alt || {}; }\n  catch (e) { try { alt = ($('Bestehenden Vorgang übernehmen').first().json || {}).alt || {}; } catch (e2) { alt = {}; } }\n  const altAufgabe = ((alt.aufgaben) || []).find(x => x && x.typ === 'anfrage_pruefen') || {};\n  const treffer = String(altAufgabe.beschreibung || '').match(/Terminprüfung:[\\s\\S]*$/);\n  // Der Block wird nie angehaengt, sondern immer genau einmal neu gesetzt.\n  return (basis + (treffer ? String.fromCharCode(10) + treffer[0].trim() : '')).slice(0, 1800);\n})() }}"
+            },
+            {
+              "fieldId": "prioritaet",
+              "fieldValue": "={{ $json.dringlichkeit || 'normal' }}"
+            },
+            {
+              "fieldId": "updated_at",
+              "fieldValue": "={{ $now.toISO() }}"
+            }
+          ]
+        }
+      },
+      "id": "19c0831d-669d-4d86-a85e-cc7bed0fc72d",
+      "name": "Mitarbeiterprüfung aktualisieren",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        4560,
+        1312
+      ],
+      "retryOnFail": false,
+      "notes": "Erstellt nach jeder erfolgreich gespeicherten Anfrage eine offene Prüfaufgabe. Diese Aufgabe wird später im Mitarbeiter-Dashboard angezeigt und kann zusätzlich eine Benachrichtigung auslösen.",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "tableId": "anfragen",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "betrieb_id",
+              "fieldValue": "={{ $('Betriebskonfiguration').first().json.betrieb.betrieb_id }}"
+            },
+            {
+              "fieldId": "anfrage_id",
+              "fieldValue": "={{ $json.anfrage_id }}"
+            },
+            {
+              "fieldId": "quelle",
+              "fieldValue": "={{ $json.quelle }}"
+            },
+            {
+              "fieldId": "technisches_anliegen",
+              "fieldValue": "={{ $json.technisches_anliegen }}"
+            },
+            {
+              "fieldId": "kategorie",
+              "fieldValue": "={{ $json.kategorie }}"
+            },
+            {
+              "fieldId": "hersteller",
+              "fieldValue": "={{ $json.hersteller }}"
+            },
+            {
+              "fieldId": "geraet",
+              "fieldValue": "={{ $json.geraet }}"
+            },
+            {
+              "fieldId": "fehlercode",
+              "fieldValue": "={{ $json.fehlercode }}"
+            },
+            {
+              "fieldId": "warmwasser",
+              "fieldValue": "={{ $json.warmwasser }}"
+            },
+            {
+              "fieldId": "dringlichkeit",
+              "fieldValue": "={{ $json.dringlichkeit }}"
+            },
+            {
+              "fieldId": "fehlende_informationen",
+              "fieldValue": "={{ $json.fehlende_informationen }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "neu"
+            },
+            {
+              "fieldId": "kunde_id",
+              "fieldValue": "={{ $json.kunde_id || null }}"
+            },
+            {
+              "fieldId": "telefon",
+              "fieldValue": "={{ $json.telefon_normalisiert || $json.telefon || '' }}"
+            },
+            {
+              "fieldId": "konversation_status",
+              "fieldValue": "offen"
+            },
+            {
+              "fieldId": "letzte_nachricht_at",
+              "fieldValue": "={{ $now.toISO() }}"
+            },
+            {
+              "fieldId": "plz",
+              "fieldValue": "={{ $json.plz || null }}"
+            }
+          ]
+        }
+      },
+      "id": "77d4c296-a16a-4f9e-99db-9385aeadcaae",
+      "name": "Anfrage speichern",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        4336,
+        2400
+      ],
+      "retryOnFail": false,
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "tableId": "aufgaben",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "betrieb_id",
+              "fieldValue": "={{ $json.betrieb_id }}"
+            },
+            {
+              "fieldId": "anfrage_db_id",
+              "fieldValue": "={{ $json.id }}"
+            },
+            {
+              "fieldId": "typ",
+              "fieldValue": "anfrage_pruefen"
+            },
+            {
+              "fieldId": "titel",
+              "fieldValue": "={{ ((String($json.dringlichkeit || '').toLowerCase() === 'notfall' || $json.kategorie === 'Wasserschaden') ? '🚨 NOTFALL: ' : 'Neue Anfrage: ') + ($json.kategorie || 'Sonstiges') }}"
+            },
+            {
+              "fieldId": "beschreibung",
+              "fieldValue": "={{ 'Anfrage ' + $json.anfrage_id + ' über ' + $json.quelle + ': ' + $json.technisches_anliegen }}"
+            },
+            {
+              "fieldId": "prioritaet",
+              "fieldValue": "={{ ['niedrig', 'normal', 'hoch', 'notfall'].includes(String($json.dringlichkeit || '').toLowerCase()) ? String($json.dringlichkeit).toLowerCase() : 'normal' }}"
+            },
+            {
+              "fieldId": "status",
+              "fieldValue": "offen"
+            },
+            {
+              "fieldId": "freigabe_erforderlich",
+              "fieldValue": "={{ true }}"
+            }
+          ]
+        }
+      },
+      "id": "437e6a88-40f6-415b-a824-14a74b75a1d0",
+      "name": "Mitarbeiterprüfung anlegen",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        4560,
+        2400
+      ],
+      "retryOnFail": false,
+      "notes": "Erstellt nach jeder erfolgreich gespeicherten Anfrage eine offene Prüfaufgabe. Diese Aufgabe wird später im Mitarbeiter-Dashboard angezeigt und kann zusätzlich eine Benachrichtigung auslösen.",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "tableId": "kunden",
+        "fieldsUi": {
+          "fieldValues": [
+            {
+              "fieldId": "betrieb_id",
+              "fieldValue": "={{ $('Betriebskonfiguration').first().json.betrieb.betrieb_id }}"
+            },
+            {
+              "fieldId": "name",
+              "fieldValue": "={{ $json.name }}"
+            },
+            {
+              "fieldId": "telefon",
+              "fieldValue": "={{ $json.telefon }}"
+            },
+            {
+              "fieldId": "ort",
+              "fieldValue": "={{ $json.ort }}"
+            },
+            {
+              "fieldId": "adresse",
+              "fieldValue": "={{ $json.adresse }}"
+            },
+            {
+              "fieldId": "telefon_normalisiert",
+              "fieldValue": "={{ $json.telefon_normalisiert }}"
+            },
+            {
+              "fieldId": "plz",
+              "fieldValue": "={{ $json.plz || null }}"
+            }
+          ]
+        }
+      },
+      "id": "8c8323c1-caee-4786-8adb-bdc8a9ec3011",
+      "name": "Kunde anlegen",
+      "type": "n8n-nodes-base.supabase",
+      "typeVersion": 1,
+      "position": [
+        3664,
+        2400
+      ],
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "49778a94-e8b2-4541-85dc-6c2d1fdf9db1",
+              "leftValue": "={{ $json.quelle }}",
+              "rightValue": "WhatsApp",
+              "operator": {
+                "type": "string",
+                "operation": "equals",
+                "name": "filter.operator.equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "d3722dd3-7399-451b-87e2-528a8a3270e5",
+      "name": "Kunde per WhatsApp antworten?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        5232,
+        1472
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=Du bist der freundliche digitale Assistent von {{ $('Betriebskonfiguration').first().json.betrieb.firmenname }}, einem SHK-Fachbetrieb (Sanitär, Heizung, Klima).\nSchreibe genau eine kurze WhatsApp-Antwort auf Deutsch in der Sie-Form: höchstens 3 Sätze und höchstens 300 Zeichen.\n\nBekannte Fakten zur Anfrage:\n- Art der Anfrage: {{ $json.kategorie }}\n- Gerät / Hersteller / Fehlercode: {{ $json.geraet }} / {{ $json.hersteller }} / {{ $json.fehlercode }}\n- Als Notfall eingestuft: {{ $json.notfall ? 'ja' : 'nein' }}\n- Ergänzung zu einer bestehenden Anfrage: {{ $json.ist_ergaenzung ? 'ja' : 'nein' }}\n- Noch fehlende Angaben: {{ $json.fehlende_informationen }}\n\nRegeln:\n- Bestätige, dass die Nachricht beim Serviceteam eingegangen ist und persönlich geprüft wird.\n- Frage höchstens nach den zwei wichtigsten fehlenden Angaben. Frage nie nach Telefonnummer oder E-Mail.\n- Nenne niemals Termine, Uhrzeiten, Wochentage, Zeiträume, Preise, Kosten oder verbindliche Zusagen (z. B. „wir kommen vorbei“).\n- Keine Diagnose, keine Reparaturanleitung, keine Sicherheitsanweisungen.\n- Keine Namen, Adressen oder Telefonnummern. Keine Grußformel, keine Signatur.\n- Gib ausschließlich den Nachrichtentext aus.",
+        "messages": {
+          "messageValues": []
+        },
+        "batching": {}
+      },
+      "id": "fb921a59-8428-42b3-aa28-04a942ea904a",
+      "name": "WhatsApp-Antwort formulieren",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "typeVersion": 1.9,
+      "position": [
+        5456,
+        1472
+      ],
+      "retryOnFail": true,
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "model": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gpt-5-mini"
+        },
+        "builtInTools": {},
+        "options": {}
+      },
+      "id": "87c2c95f-e57e-4d26-8057-cd72881d106c",
+      "name": "OpenAI Modell – WhatsApp-Antwort",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenAi",
+      "typeVersion": 1.3,
+      "position": [
+        5528,
+        1688
+      ],
+      "credentials": {
+        "openAiApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_OPENAI_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.twilio.com/2010-04-01/Accounts/' + $('Betriebskonfiguration').first().json.betrieb.twilio_account_sid + '/Messages.json' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/x-www-form-urlencoded",
+        "body": "={{ 'To=' + encodeURIComponent('whatsapp:' + $json.an) + '&From=' + encodeURIComponent('whatsapp:' + $('Betriebskonfiguration').first().json.betrieb.whatsapp_absender) + '&Body=' + encodeURIComponent($json.antwort_text) }}",
+        "options": {}
+      },
+      "id": "2107ef02-e92c-45bd-b711-337753033cd0",
+      "name": "WhatsApp-Antwort senden",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        6032,
+        1472
+      ],
+      "disabled": true,
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_TWILIO_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 10
+            }
+          ]
+        }
+      },
+      "id": "ddda5200-9f78-4680-8c3d-4eb96562fc7d",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -1840,
+        1568
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "advanced": true,
+        "mergeByFields": {
+          "values": [
+            {
+              "field1": "bestehende_telefon",
+              "field2": "telefon"
+            }
+          ]
+        },
+        "joinMode": "enrichInput2",
+        "options": {
+          "multipleMatches": "first"
+        }
+      },
+      "id": "ba3643e9-81e1-4195-ba04-65febdf0446b",
+      "name": "WhatsApp-Kontext zusammenführen",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        1296,
+        1024
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "combineBy": "combineByPosition",
+        "options": {}
+      },
+      "id": "3492aee9-b94a-4eb8-aa55-999c84221875",
+      "name": "Daten zusammenführen",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        2320,
+        1280
+      ],
+      "notes": "Führt Kontaktdaten (Weg A) und KI-Ergebnis (Weg B) wieder zusammen. Verknüpft über das gemeinsame Feld anfrage_id (Kontaktdaten: anfrage_id, KI-Ergebnis: output.anfrage_id). Es werden ausschließlich Textwerte verglichen, keine Objekte."
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ed43ad34-8644-4a8c-99d6-6cd6d2da02c4",
+              "name": "aktuelle_nachricht",
+              "value": "={{ $json.technisches_anliegen || $json.nachricht || '' }}",
+              "type": "string"
+            },
+            {
+              "id": "a66d473c-d1df-4bad-b5ae-4be4b823ed01",
+              "name": "ist_folgenachricht",
+              "value": "={{ Boolean($json.bestehende_anfrage_db_id) }}",
+              "type": "string"
+            },
+            {
+              "id": "d7092af0-f919-42ef-ac36-912d7b92e743",
+              "name": "technisches_anliegen",
+              "value": "={{ (() => { const neu = String($json.technisches_anliegen || $json.nachricht || '').trim(); const alt = String($json.bisheriges_anliegen || '').trim(); return alt ? alt + '\\nErgänzung: ' + neu : neu; })() }}",
+              "type": "string"
+            },
+            {
+              "id": "94f37f09-4bae-4802-9958-fa648cdce85c",
+              "name": "bestehende_anfrage_db_id",
+              "value": "={{ $json.bestehende_anfrage_db_id || '' }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "5bb5f000-12c9-4d84-8e8c-9a73e071b9c2",
+      "name": "WhatsApp-Kontext vorbereiten",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        1520,
+        1024
+      ]
+    },
+    {
+      "parameters": {
+        "toRecipients": "={{ $json.empfaenger }}",
+        "subject": "={{ $json.betreff }}",
+        "bodyContent": "={{ $json.html }}",
+        "additionalFields": {
+          "importance": "={{ $json.wichtigkeit }}",
+          "bodyContentType": "html"
+        }
+      },
+      "id": "7bb29aea-d302-413a-9cd4-984c0a088d85",
+      "name": "Mitarbeiter per E-Mail informieren",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        5232,
+        976
+      ],
+      "retryOnFail": false,
+      "maxTries": 3,
+      "webhookId": "c81736cc-becf-4940-9e24-56e8ff76e6cb",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "ks-match",
+              "name": "kunde_match",
+              "type": "string",
+              "value": "={{ String($json.telefon_normalisiert || '').trim() || '__kein_treffer__' }}"
+            },
+            {
+              "id": "ks-id",
+              "name": "kunde_id",
+              "type": "string",
+              "value": "={{ $json.id || '' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "d8fc098d-b558-4789-8084-13c1d99ffd21",
+      "name": "Kundensuche vorbereiten",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        2992,
+        1344
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "advanced": true,
+        "mergeByFields": {
+          "values": [
+            {
+              "field1": "kunde_match",
+              "field2": "telefon_normalisiert"
+            }
+          ]
+        },
+        "joinMode": "enrichInput2",
+        "options": {
+          "multipleMatches": "first"
+        }
+      },
+      "id": "501cfb33-c7d4-4b8b-bc13-f69efaaa0479",
+      "name": "Kundendaten zusammenführen",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        3216,
+        1408
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "// Bündelt neue WhatsApp-Nachrichten derselben Telefonnummer aus EINEM Twilio-Abruf zu EINER Anfrage.\n// Reihenfolge: älteste Nachricht zuerst. Kein Inhalt geht verloren, keine parallelen Updates auf dieselbe Anfrage.\nconst eintraege = $input.all().map((item, index) => ({ item, index }));\nconst zeit = (j) => { const t = Date.parse(j.zeitpunkt || ''); return Number.isNaN(t) ? 0 : t; };\neintraege.sort((a, b) => (zeit(a.item.json) - zeit(b.item.json)) || String(a.item.json.message_sid).localeCompare(String(b.item.json.message_sid)));\n\nconst gruppen = new Map();\nconst gesehen = new Set();\nfor (const e of eintraege) {\n  // Dieselbe Twilio-Nachricht (SID) innerhalb eines Abrufs nur einmal verarbeiten.\n  const sid = String(e.item.json.message_sid || '');\n  if (sid && gesehen.has(sid)) continue;\n  if (sid) gesehen.add(sid);\n  const nummer = String(e.item.json.telefon || '').trim() || ('__ohne_nummer__' + e.index);\n  if (!gruppen.has(nummer)) gruppen.set(nummer, []);\n  gruppen.get(nummer).push(e);\n}\n\nreturn [...gruppen.values()].map((gruppe) => {\n  const erste = gruppe[0].item.json;\n  const letzte = gruppe[gruppe.length - 1].item.json;\n  const texte = gruppe\n    .map((e) => String(e.item.json.technisches_anliegen || e.item.json.nachricht || '').trim())\n    .filter(Boolean);\n  const text = texte.map((t, i) => (i === 0 ? t : 'Ergänzung: ' + t)).join('\\n');\n  return {\n    json: {\n      ...erste,\n      nachricht: text,\n      technisches_anliegen: text,\n      anfrage_id: erste.message_sid,\n      message_sid: erste.message_sid,\n      message_sids: gruppe.map((e) => e.item.json.message_sid).join(','),\n      anzahl_nachrichten: gruppe.length,\n      anzahl_medien: String(gruppe.reduce((summe, e) => summe + Number(e.item.json.anzahl_medien || 0), 0)),\n      zeitpunkt: letzte.zeitpunkt,\n    },\n    pairedItem: gruppe.map((e) => ({ item: e.index })),\n  };\n});"
+      },
+      "id": "3a12a40f-193e-49a4-bfe9-b8a41d2022b9",
+      "name": "WhatsApp-Nachrichten je Nummer bündeln",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        624,
+        1024
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "vv-quelle",
+              "leftValue": "={{ $json.vapi_datenquelle }}",
+              "rightValue": "keine",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              }
+            },
+            {
+              "id": "vv-text",
+              "leftValue": "={{ String($json.technisches_anliegen || '').trim() }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a7156c54-b412-4e0a-aeec-edbef67d3557",
+      "name": "Vapi-Daten verwertbar?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        848,
+        1312
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "so-da",
+              "leftValue": "={{ $json.vapi_datenquelle }}",
+              "rightValue": "strukturiert",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "44242018-175d-4332-8017-65f9cbe98a22",
+      "name": "Structured Output vorhanden?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1520,
+        1824
+      ]
+    },
+    {
+      "parameters": {
+        "errorMessage": "={{ 'VAPI OHNE VERWERTBARE DATEN – Anruf ' + ($json.anfrage_id || 'ohne ID') + ': weder Structured Output noch Anrufzusammenfassung vorhanden. Es wurde KEINE Anfrage gespeichert. Bitte den Anruf in Vapi manuell prüfen.' }}"
+      },
+      "id": "22b44f82-8612-4eb3-96b8-d72d4c49dbf7",
+      "name": "Abbruch: Vapi ohne verwertbare Daten",
+      "type": "n8n-nodes-base.stopAndError",
+      "typeVersion": 1,
+      "position": [
+        1072,
+        1312
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cfg-betrieb",
+              "name": "betrieb",
+              "type": "object",
+              "value": "={{ {\n  betrieb_id: '00000000-0000-0000-0000-000000000001',\n  firmenname: 'SHK-Demobetrieb (bitte anpassen)',\n  mitarbeiter_email: 'YOUR_EMAIL@example.com',\n  fehleralarm_email: 'YOUR_EMAIL@example.com',\n  bereitschaft_whatsapp: '',\n  betrieb_telefon: '',\n  whatsapp_absender: 'EXAMPLE_PHONE_NUMBER',\n  twilio_account_sid: 'YOUR_TWILIO_ACCOUNT_SID',\n  supabase_url: 'https://YOUR_PROJECT.supabase.co',\n  whatsapp_verarbeiten_ab: '2026-09-16T18:26:11Z',\n  n8n_url: 'https://YOUR_N8N_INSTANCE',\n  text_standardantwort: 'Vielen Dank für Ihre Nachricht. Ihre Anfrage ist bei unserem Serviceteam eingegangen und wird persönlich geprüft. Termine und Preise stimmen wir immer direkt mit Ihnen ab.',\n  text_standardantwort_notfall: 'Vielen Dank. Ihre Meldung wurde als Notfall an unser Serviceteam weitergeleitet. Wir melden uns so schnell wie möglich.',\n  text_sicherheit_wasser: 'ENTWURF – bitte freigeben: Wenn es gefahrlos möglich ist, schließen Sie bitte den Hauptwasserhahn und berühren Sie keine nassen Elektrogeräte.',\n  text_sicherheit_gas: 'ENTWURF – bitte freigeben: Bei Gasgeruch bitte keine Schalter betätigen, Fenster öffnen, das Gebäude verlassen und von draußen den Gas-Notruf Ihres Versorgers oder die 112 anrufen.',\n  termin: {\n    modus: 'test',\n    kalender: { anbieter: 'test', ressource_id: 'team-1', outlook: { postfach: '', kalender_id: '' } },\n    einsatzgebiet: { plz: ['12345'], orte: ['Musterstadt'] }\n  }\n} }}"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "id": "415fd5e8-3cbf-4081-b8c5-faa7a63add5e",
+      "name": "Betriebskonfiguration",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        -1616,
+        1952
+      ],
+      "notes": "ZENTRALE KONFIGURATION je SHK-Betrieb. Nur hier Werte ändern. Texte mit „ENTWURF“ werden technisch nie an Kunden gesendet."
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "ek-WhatsApp",
+                    "leftValue": "={{ $('Schedule Trigger').isExecuted }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "WhatsApp"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "ek-Website",
+                    "leftValue": "={{ $('Website-Anfrage – Demo').isExecuted }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Website"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "ek-Telefon",
+                    "leftValue": "={{ $('Vapi-Telefonassistent').isExecuted }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Telefon"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "ek-Fehler",
+                    "leftValue": "={{ $('Error Trigger').isExecuted }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Fehler"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "ek-VapiTermine",
+                    "leftValue": "={{ $('Vapi-Terminfunktionen').isExecuted }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Vapi-Termine"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "ek-Vorabpruefung",
+                    "leftValue": "={{ $('Prüfung starten').isExecuted }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "Vorabpruefung"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "30faaf12-33e3-4be6-88e5-3b99802855e3",
+      "name": "Eingangskanal",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -1392,
+        1904
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "33ea90c6-f6d6-41c7-8032-b95027c55081",
+      "name": "Error Trigger",
+      "type": "n8n-nodes-base.errorTrigger",
+      "typeVersion": 1,
+      "position": [
+        -1840,
+        1760
+      ]
+    },
+    {
+      "parameters": {},
+      "id": "7ab24109-0024-4ca5-9036-5f5f907234c1",
+      "name": "Speicherung erfolgreich",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        4784,
+        1408
+      ],
+      "notes": "Alles danach läuft NUR, wenn Anfrage und Aufgabe erfolgreich gespeichert wurden."
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ JSON.stringify((() => {\n  const k = $('Bestehende Anfrage?').item.json;\n  const a = $json;\n  const c = $('Betriebskonfiguration').first().json.betrieb;\n  const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/\"/g, '&quot;');\n  const dring = String(k.dringlichkeit || 'normal').toLowerCase();\n  const kategorie = k.kategorie || 'Sonstiges';\n  // Notfall und Notfallart kommen aus der negationsfaehigen Gefahrenbewertung.\n  // Eine ausdrueckliche Verneinung (z. B. kein Gasgeruch) erzeugt keine Kennzeichnung;\n  // eine von der KI gesetzte Notfallstufe bleibt dagegen bestehen.\n  const g = (k.gefahren && typeof k.gefahren === 'object') ? k.gefahren : {};\n  const gefahr_unklar = g.unklar === true;\n  const notfall = g.notfall === true || dring === 'notfall' || kategorie === 'Wasserschaden';\n  const notfall_art = g.notfall_art || (kategorie === 'Wasserschaden' ? 'wasser' : (notfall ? 'sonstig' : ''));\n  const ergaenzung = Boolean(String(k.bestehende_anfrage_db_id || '').trim());\n  const tel = String(k.telefon_normalisiert || k.telefon || '').trim();\n  const telLink = tel ? '<a href=\"tel:' + esc(tel) + '\" style=\"font-size:16px;font-weight:bold\">' + esc(tel) + '</a>' : 'nicht angegeben';\n  const weiter = ({ 'Heizungsstörung': 'Technischer Einsatz', 'Wasserschaden': 'Sofortige Mitarbeiterprüfung', 'Wartung': 'Wartungsplanung', 'Neuinstallation': 'Beratung', 'Angebotsanfrage': 'Angebot vorbereiten (nach Freigabe)' })[kategorie] || 'Manuelle Prüfung';\n  const zeile = (l, v) => '<tr><td style=\"padding:4px 12px 4px 0;color:#555;vertical-align:top\"><b>' + l + '</b></td><td style=\"padding:4px 0\">' + v + '</td></tr>';\n  const banner = notfall ? '<div style=\"background:#b00020;color:#ffffff;padding:12px 16px;font-size:18px;font-weight:bold;border-radius:4px\">🚨 NOTFALL – bitte sofort zurückrufen</div>' : '';\n  const html = banner\n    + '<h2 style=\"margin:12px 0;font-family:Arial,sans-serif\">' + (ergaenzung ? 'Ergänzung zu bestehender Anfrage' : 'Neue Serviceanfrage') + '</h2>'\n    + '<table style=\"border-collapse:collapse;font-family:Arial,sans-serif;font-size:14px\">'\n    + zeile('Rückruf', telLink)\n    + zeile('Kunde', esc(k.name) || 'nicht angegeben')\n    + zeile('Adresse', esc([k.adresse, [k.plz, k.ort].filter(Boolean).join(' ')].filter(Boolean).join(', ')) || 'nicht angegeben')\n    + zeile('Kanal', esc(k.quelle))\n    + zeile('Kategorie', esc(kategorie))\n    + zeile('Dringlichkeit', esc(dring))\n    + zeile('Empfohlene Weiterleitung', esc(weiter))\n    + zeile('Gerät / Hersteller / Fehlercode', esc([k.geraet, k.hersteller, k.fehlercode].join(' / ')))\n    + zeile('Warmwasser', esc(k.warmwasser))\n    + zeile('Fehlende Informationen', esc(k.fehlende_informationen || 'keine'))\n    + zeile('Anliegen', esc(k.technisches_anliegen).replace(/\\n/g, '<br>'))\n    + zeile('Aufgaben-ID', esc(a.id))\n    + '</table>'\n    + '<p style=\"margin-top:16px;padding:8px;background:#fff4e5;border-left:4px solid #f0a000;font-family:Arial,sans-serif\">Termine, Preise und verbindliche Zusagen nur nach menschlicher Prüfung und Freigabe.</p>';\n  const betreff = (notfall ? '🚨 NOTFALL' : '[' + dring.toUpperCase() + ']') + ' ' + (ergaenzung ? 'Ergänzung: ' : 'Neue Anfrage: ') + kategorie + ' – ' + (k.ort || 'Ort unbekannt');\n  return {\n    aufgabe_id: a.id || '',\n    anfrage_db_id: a.anfrage_db_id || '',\n    eingang_ids: String(k.eingang_ids || '').trim(),\n    eingang_kanal: ({ 'WhatsApp': 'whatsapp', 'website': 'website', 'Telefon': 'telefon' })[k.quelle] || '',\n    anfrage_id: k.anfrage_id || '',\n    plz: k.plz || '',\n    quelle: k.quelle || '',\n    kategorie: kategorie,\n    dringlichkeit: dring,\n    notfall: notfall,\n    gefahr_unklar: gefahr_unklar,\n    gefahren: g,\n    notfall_art: notfall_art,\n    ist_ergaenzung: ergaenzung,\n    hersteller: k.hersteller || 'Unbekannt',\n    geraet: k.geraet || 'Unbekannt',\n    fehlercode: k.fehlercode || 'Unbekannt',\n    fehlende_informationen: k.fehlende_informationen || 'keine',\n    telefon_normalisiert: tel,\n    empfaenger: c.mitarbeiter_email,\n    wichtigkeit: (notfall || dring === 'hoch') ? 'High' : 'Normal',\n    betreff: betreff,\n    html: html,\n    bereitschaft_text: (notfall ? '🚨 NOTFALL' : (gefahr_unklar ? '⚠️ Mögliche Gefahr unklar' : 'Hinweis')) + ' (' + kategorie + ') – ' + (k.ort || 'Ort unbekannt') + ' – Rückruf: ' + (tel || 'keine Nummer') + ' – Aufgabe ' + (a.id || '')\n  };\n})()) }}",
+        "options": {}
+      },
+      "id": "677feeb8-c15d-4bbf-bc5e-406c253d299e",
+      "name": "Benachrichtigung vorbereiten",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        5008,
+        1408
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "nf",
+              "leftValue": "={{ $json.notfall }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "bb5304ad-8bc3-41c5-8348-0ef70d8311c5",
+      "name": "Notfall?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        5232,
+        1168
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.twilio.com/2010-04-01/Accounts/' + $('Betriebskonfiguration').first().json.betrieb.twilio_account_sid + '/Messages.json' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "sendBody": true,
+        "contentType": "raw",
+        "rawContentType": "application/x-www-form-urlencoded",
+        "body": "={{ 'To=' + encodeURIComponent('whatsapp:' + $('Betriebskonfiguration').first().json.betrieb.bereitschaft_whatsapp) + '&From=' + encodeURIComponent('whatsapp:' + $('Betriebskonfiguration').first().json.betrieb.whatsapp_absender) + '&Body=' + encodeURIComponent($json.bereitschaft_text) }}",
+        "options": {}
+      },
+      "id": "4aa98ae2-87c2-4f78-bb22-59d027829b98",
+      "name": "Bereitschaft alarmieren",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        5520,
+        1168
+      ],
+      "disabled": true,
+      "notes": "VORBEREITET, DEAKTIVIERT. Braucht Bereitschaftsnummer in der Betriebskonfiguration + produktiven Twilio-Absender.",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_TWILIO_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ JSON.stringify((() => {\n  const k = $('Kunde per WhatsApp antworten?').item.json;\n  const c = $('Betriebskonfiguration').first().json.betrieb;\n  const ki = String($json.text || '').trim();\n  const verboten = /\\b\\d{1,2}[:.]\\d{2}\\b|\\b\\d{1,2}\\s*uhr\\b|\\buhr\\b|\\b(montag|dienstag|mittwoch|donnerstag|freitag|samstag|sonntag|heute|morgen|übermorgen|uebermorgen|wochenende)\\b|n(ä|ae)chste[nrs]?\\s+woche|\\b\\d{1,2}\\.\\s?\\d{1,2}\\.|€|\\beuro\\b|\\bkosten|\\bpreis|\\bpauschal|\\btermin|\\bvorbei|\\bwir\\s+kommen\\b|\\btechniker\\s+kommt\\b|\\bgarantier|\\bversprech|\\bzusage|\\bverbindlich|\\binnerhalb\\s+von\\b|\\bin\\s+\\d+\\s*(minuten|stunden|tagen)\\b|\\+?\\d[\\d\\s\\/()-]{6,}|@/i;\n  let grund = '';\n  if (!ki) grund = 'Keine KI-Antwort erhalten';\n  else if (ki.length > 400) grund = 'KI-Antwort zu lang';\n  else if (verboten.test(ki)) grund = 'KI-Antwort enthält Termin, Zeit, Preis, Zusage oder Kontaktdaten';\n  const basis = grund ? (k.notfall ? c.text_standardantwort_notfall : c.text_standardantwort) : ki;\n  const sicherheit = k.notfall_art === 'gas' ? c.text_sicherheit_gas : (k.notfall_art === 'wasser' ? c.text_sicherheit_wasser : '');\n  const freigegeben = Boolean(sicherheit) && !/^\\s*ENTWURF/i.test(sicherheit);\n  return {\n    an: k.telefon_normalisiert,\n    antwort_text: [basis, freigegeben ? sicherheit : ''].filter(Boolean).join('\\n\\n'),\n    antwort_quelle: grund ? 'Standardantwort' : 'KI',\n    pruefgrund: grund || 'KI-Antwort bestanden',\n    sicherheitstext_offen: Boolean(sicherheit) && !freigegeben,\n    notfall: k.notfall\n  };\n})()) }}",
+        "options": {}
+      },
+      "id": "df778f49-e751-43e2-97db-60e1522fdf72",
+      "name": "KI-Antwort prüfen",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        5808,
+        1472
+      ],
+      "notes": "Leitplanke: Antwort mit Termin/Zeit/Preis/Zusage/Kontaktdaten oder ohne KI-Ergebnis wird durch die Standardantwort ersetzt. ENTWURF-Sicherheitstexte werden nie gesendet."
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "web",
+              "leftValue": "={{ $json.quelle }}",
+              "rightValue": "website",
+              "operator": {
+                "type": "string",
+                "operation": "equals"
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6eed9c16-00ec-4ac4-b3e7-89a93462b337",
+      "name": "Website-Anfrage?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        5232,
+        2256
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "Vielen Dank – Ihre Anfrage ist eingegangen",
+        "completionMessage": "={{ $json.notfall ? $('Betriebskonfiguration').first().json.betrieb.text_standardantwort_notfall : $('Betriebskonfiguration').first().json.betrieb.text_standardantwort }}",
+        "options": {}
+      },
+      "id": "c9b3edb4-bc26-4501-8c90-14dbd30bda6e",
+      "name": "Formular-Bestätigung",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        7152,
+        1776
+      ],
+      "webhookId": "cc172144-c471-46d3-b524-c2dc0402e90f"
+    },
+    {
+      "parameters": {
+        "mode": "raw",
+        "jsonOutput": "={{ JSON.stringify((() => {\n  const c = $json.betrieb || {};\n  const ex = $json.execution || {};\n  const tr = $json.trigger || {};\n  const wf = $json.workflow || {};\n  const fehler = ex.error || tr.error || {};\n  const esc = (s) => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\n  const meldung = String(fehler.message || 'Unbekannter Fehler').slice(0, 300);\n  const schritt = ex.lastNodeExecuted || (fehler.node ? fehler.node.name : '') || 'unbekannt';\n  const link = ex.url || '';\n  const zeile = (l, v) => '<tr><td style=\"padding:4px 12px 4px 0\"><b>' + l + '</b></td><td>' + v + '</td></tr>';\n  return {\n    empfaenger: c.fehleralarm_email,\n    betreff: '⚠️ Technischer Fehler im AI-Backoffice – ' + schritt,\n    html: '<h2 style=\"font-family:Arial,sans-serif\">⚠️ Technischer Fehler im AI-Backoffice</h2>'\n      + '<table style=\"font-family:Arial,sans-serif;font-size:14px\">'\n      + zeile('Zeit', esc($now.setZone('Europe/Berlin').toFormat('dd.MM.yyyy HH:mm:ss')))\n      + zeile('Workflow', esc(wf.name))\n      + zeile('Betroffener Schritt', esc(schritt))\n      + zeile('Fehlermeldung', esc(meldung))\n      + zeile('Ausführung', link ? '<a href=\"' + esc(link) + '\">in n8n öffnen</a>' : esc(ex.id || '–'))\n      + '</table>'\n      + '<p style=\"font-family:Arial,sans-serif\">Diese Meldung enthält bewusst keine Kundendaten. Bitte die Ausführung prüfen und betroffene Anfragen ggf. manuell nachbearbeiten.</p>',\n    ausfuehrung_id: ex.id || '',\n    betroffener_schritt: schritt\n  };\n})()) }}",
+        "options": {}
+      },
+      "id": "45555305-d6f2-4ce5-b610-57fe05f5fc61",
+      "name": "Fehleralarm vorbereiten",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.5,
+      "position": [
+        -1168,
+        2368
+      ]
+    },
+    {
+      "parameters": {
+        "toRecipients": "={{ $json.empfaenger }}",
+        "subject": "={{ $json.betreff }}",
+        "bodyContent": "={{ $json.html }}",
+        "additionalFields": {
+          "importance": "High",
+          "bodyContentType": "html"
+        }
+      },
+      "id": "ae374058-5f3f-442f-825d-110657b5a634",
+      "name": "Fehleralarm senden",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        -944,
+        2368
+      ],
+      "webhookId": "aa4baad8-1913-4520-a231-7a34da61ad73",
+      "disabled": true,
+      "notes": "VORBEREITET, DEAKTIVIERT. Braucht Outlook-Zugangsdaten + echte Empfängeradresse in der Betriebskonfiguration."
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Betriebskonfiguration').first().json.betrieb.supabase_url + '/rest/v1/eingaenge' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "select",
+              "value": "externe_id,status,versuche,empfangen_at"
+            },
+            {
+              "name": "betrieb_id",
+              "value": "={{ 'eq.' + $('Betriebskonfiguration').first().json.betrieb.betrieb_id }}"
+            },
+            {
+              "name": "kanal",
+              "value": "eq.whatsapp"
+            },
+            {
+              "name": "externe_id",
+              "value": "={{ 'in.(' + $input.all().map(i => String(i.json.message_sid || '')).filter(Boolean).join(',') + ')' }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3fed0e8a-e7ea-477a-8cb6-b621bfc22345",
+      "name": "WhatsApp-Eingänge prüfen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        -272,
+        1024
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "notes": "Liest den Status der abgerufenen Nachrichten aus der Supabase-Tabelle eingaenge (nur technische IDs).",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Eingangsprotokoll: nur neue oder hängengebliebene WhatsApp-Nachrichten verarbeiten.\n// Übersprungen werden: Nachrichten vor dem Stichtag (whatsapp_verarbeiten_ab), bereits verarbeitete,\n// gerade in Bearbeitung befindliche (< 15 Min.) und nach 3 Versuchen aufgegebene Eingänge.\nconst cfg = $('Betriebskonfiguration').first().json.betrieb;\nconst stichtag = Date.parse(cfg.whatsapp_verarbeiten_ab || '');\nconst bekannt = new Map();\nfor (const item of $('WhatsApp-Eingänge prüfen').all()) {\n  if (item.json && item.json.externe_id) bekannt.set(String(item.json.externe_id), item.json);\n}\nconst jetzt = Date.now();\nconst gesehen = new Set();\nconst nachrichten = [];\nconst protokoll = [];\nfor (const item of $('WhatsApp-API-Daten standardisieren').all()) {\n  const sid = String(item.json.message_sid || '');\n  if (!sid || gesehen.has(sid)) continue;\n  gesehen.add(sid);\n  const eingang = Date.parse(item.json.zeitpunkt || '');\n  if (!Number.isNaN(stichtag) && !Number.isNaN(eingang) && eingang < stichtag) continue;\n  const eintrag = bekannt.get(sid);\n  if (eintrag) {\n    if (eintrag.status === 'verarbeitet') continue;\n    const minuten = (jetzt - Date.parse(eintrag.empfangen_at || '')) / 60000;\n    if (eintrag.status === 'empfangen' && minuten < 15) continue;\n    if (Number(eintrag.versuche || 0) >= 3) continue;\n  }\n  nachrichten.push(item.json);\n  protokoll.push({\n    betrieb_id: cfg.betrieb_id,\n    kanal: 'whatsapp',\n    externe_id: sid,\n    status: 'empfangen',\n    empfangen_at: new Date(jetzt).toISOString(),\n    versuche: Number(eintrag ? eintrag.versuche || 0 : 0) + 1,\n  });\n}\nif (nachrichten.length === 0) return [];\nreturn [{ json: { protokoll, nachrichten } }];"
+      },
+      "id": "f9ba4352-7b4b-4b8d-a0d2-ac67e91cc0db",
+      "name": "WhatsApp-Eingänge auswählen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -48,
+        1024
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Betriebskonfiguration').first().json.betrieb.supabase_url + '/rest/v1/eingaenge?on_conflict=betrieb_id,kanal,externe_id' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.protokoll) }}",
+        "options": {}
+      },
+      "id": "b1e4df45-3e80-4d20-8c7c-11b998d1521d",
+      "name": "WhatsApp-Eingänge erfassen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        176,
+        1024
+      ],
+      "alwaysOutputData": true,
+      "executeOnce": true,
+      "notes": "Trägt die ausgewählten Nachrichten als „empfangen“ ein (Upsert, idempotent).",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Nach erfolgreicher Erfassung im Eingangsprotokoll: ausgewählte Nachrichten weiterreichen.\nreturn $('WhatsApp-Eingänge auswählen').first().json.nachrichten.map((json) => ({ json, pairedItem: { item: 0 } }));"
+      },
+      "id": "7169de1d-73be-4fcf-98b5-10538783e418",
+      "name": "Zu verarbeitende Nachrichten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        400,
+        1024
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Betriebskonfiguration').first().json.betrieb.supabase_url + '/rest/v1/eingaenge' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "select",
+              "value": "externe_id,status,versuche,empfangen_at"
+            },
+            {
+              "name": "betrieb_id",
+              "value": "={{ 'eq.' + $('Betriebskonfiguration').first().json.betrieb.betrieb_id }}"
+            },
+            {
+              "name": "kanal",
+              "value": "eq.telefon"
+            },
+            {
+              "name": "externe_id",
+              "value": "={{ 'eq.' + String($json.body?.message?.call?.id || 'ohne-call-id') }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4051d99b-38e2-4479-8f53-f24765928793",
+      "name": "Vapi-Eingang prüfen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        -496,
+        1312
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 2000,
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Doppelte Vapi-Abschlussberichte erkennen: bereits verarbeitete oder gerade laufende Anrufe nicht erneut verarbeiten.\nconst cfg = $('Betriebskonfiguration').first().json.betrieb;\nconst bericht = $('Ist Abschlussbericht?').first().json;\nconst callId = String((bericht.body && bericht.body.message && bericht.body.message.call && bericht.body.message.call.id) || '').trim();\nif (!callId) {\n  throw new Error('Vapi-Abschlussbericht ohne Call-ID – Anruf bitte in Vapi manuell prüfen.');\n}\nconst eintrag = $('Vapi-Eingang prüfen').all().map((i) => i.json).find((r) => r && String(r.externe_id) === callId);\nif (eintrag) {\n  if (eintrag.status === 'verarbeitet') return [];\n  const minuten = (Date.now() - Date.parse(eintrag.empfangen_at || '')) / 60000;\n  if (eintrag.status === 'empfangen' && minuten < 15) return [];\n  if (Number(eintrag.versuche || 0) >= 3) return [];\n}\nreturn [{\n  json: {\n    protokoll: [{\n      betrieb_id: cfg.betrieb_id,\n      kanal: 'telefon',\n      externe_id: callId,\n      status: 'empfangen',\n      empfangen_at: new Date().toISOString(),\n      versuche: Number(eintrag ? eintrag.versuche || 0 : 0) + 1,\n    }],\n  },\n}];"
+      },
+      "id": "6bb9ec00-14c2-476f-8517-8fbd48ade9cb",
+      "name": "Vapi-Eingang auswählen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -272,
+        1312
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Betriebskonfiguration').first().json.betrieb.supabase_url + '/rest/v1/eingaenge?on_conflict=betrieb_id,kanal,externe_id' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify($json.protokoll) }}",
+        "options": {}
+      },
+      "id": "918bceee-b331-43d8-9cc0-cc3426c51967",
+      "name": "Vapi-Eingang erfassen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        -48,
+        1312
+      ],
+      "alwaysOutputData": true,
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "ee-ids",
+              "leftValue": "={{ String($json.eingang_ids || '') }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "ee-kanal",
+              "leftValue": "={{ String($json.eingang_kanal || '') }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "1bc299ed-8a65-4805-8e4f-550e42ff15e4",
+      "name": "Eingang erfasst?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        5232,
+        784
+      ]
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Betriebskonfiguration').first().json.betrieb.supabase_url + '/rest/v1/eingaenge' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "betrieb_id",
+              "value": "={{ 'eq.' + $('Betriebskonfiguration').first().json.betrieb.betrieb_id }}"
+            },
+            {
+              "name": "kanal",
+              "value": "={{ 'eq.' + $json.eingang_kanal }}"
+            },
+            {
+              "name": "externe_id",
+              "value": "={{ 'in.(' + $json.eingang_ids + ')' }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'verarbeitet', verarbeitet_at: $now.toISO(), anfrage_db_id: $json.anfrage_db_id || null }) }}",
+        "options": {}
+      },
+      "id": "c97fd6b9-877f-4c4f-b150-d9ec7148decc",
+      "name": "Eingang als verarbeitet markieren",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        5520,
+        784
+      ],
+      "notes": "Setzt status = verarbeitet. Erst danach laufen Benachrichtigungen, damit ein späterer Sendefehler keine Doppelverarbeitung auslöst.",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "at-ok",
+              "leftValue": "={{ $json.notfall !== true && $json.gefahr_unklar !== true && Boolean($json.anfrage_db_id) && /^\\d{5}$/.test(String($json.plz || '')) && !/KI-Analyse nicht verfügbar/i.test(String($json.fehlende_informationen || '')) }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "79dd208b-84f4-4688-a247-9c89e3b8d6ba",
+      "name": "Automatische Terminierung versuchen?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        5520,
+        2256
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "// Kanalneutrale Übergabe an den zentralen Terminassistenten (erst nach erfolgreicher Speicherung).\nconst b = $json;\nconst k = $('Bestehende Anfrage?').item.json;\nconst betrieb = $('Betriebskonfiguration').first().json.betrieb;\nconst gefahren = $('Kontaktdaten behalten').isExecuted ? ($('Kontaktdaten behalten').item.json.gefahren || null) : null;\nreturn { json: {\n  aktion: 'vorschlagen',\n  kanal: 'website',\n  betrieb,\n  kunden_nachricht: '',\n  anfrage: {\n    anfrage_db_id: b.anfrage_db_id,\n    anfrage_id: b.anfrage_id,\n    kategorie: b.kategorie,\n    dringlichkeit: b.dringlichkeit,\n    notfall: b.notfall === true,\n    gefahren,\n    technisches_anliegen: k.technisches_anliegen || '',\n    fehlende_informationen: b.fehlende_informationen,\n    adresse: k.adresse || '',\n    ort: k.ort || '',\n    plz: /^\\d{5}$/.test(String(k.plz || '')) ? String(k.plz) : '',\n    telefon: b.telefon_normalisiert || k.telefon || ''\n  }\n} };\n"
+      },
+      "id": "4d45a517-0cd9-4ad3-8923-3bc49dbaea51",
+      "name": "Terminassistent: Eingabe (Website)",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5808,
+        2256
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SUBWORKFLOW_ID",
+          "cachedResultName": "AI Terminassistent – SHK"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "0f302468-50fc-4960-a3a7-25c0a5af9ac6",
+      "name": "Terminassistent: Vorschläge (Website)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        6032,
+        2256
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "ta-ok",
+              "leftValue": "={{ $json.ergebnis === 'vorgeschlagen' && Array.isArray($json.vorschlaege) && $json.vorschlaege.length > 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "8e688c8d-faee-4542-a858-d133b50dcdd3",
+      "name": "Termine zur Auswahl?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        6256,
+        2256
+      ]
+    },
+    {
+      "parameters": {
+        "defineForm": "json",
+        "jsonOutput": "={{ JSON.stringify([{ fieldLabel: 'Wunschtermin', fieldType: 'radio', fieldOptions: { values: $json.vorschlaege.map(v => ({ option: v.nummer + ') ' + v.anzeige })).concat([{ option: 'Keiner dieser Termine passt' }]) }, requiredField: true }]) }}",
+        "limitWaitTime": true,
+        "resumeAmount": 30,
+        "resumeUnit": "minutes",
+        "options": {
+          "formTitle": "Terminauswahl",
+          "formDescription": "={{ $json.aktion === 'vorschlagen' ? 'Für Ihr Anliegen sind folgende Termine frei. Der Termin ist erst verbindlich, wenn Ihnen auf der nächsten Seite die Buchung bestätigt wird.' : 'Weitere freie Termine für Ihr Anliegen. Der Termin ist erst verbindlich, wenn Ihnen auf der nächsten Seite die Buchung bestätigt wird.' }}",
+          "buttonLabel": "Termin verbindlich buchen"
+        }
+      },
+      "id": "eea6280c-46c5-493f-a7b7-6247c7347282",
+      "name": "Terminauswahl (Website)",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        6480,
+        2256
+      ],
+      "webhookId": "a7a2328b-7a7c-4dcb-85b8-ef3c04119233"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Antwort aus den Formularseiten in eine eindeutige Kundenantwort übersetzen:\n// Terminnummer, „Keiner dieser Termine passt“ oder – nach ausgeschöpften Vorschlagsrunden – der Wunschzeitraum.\nconst E = $('Terminassistent: Eingabe (Website)').first().json;\nconst x = $input.first().json || {};\nif (x.Wunschzeitraum !== undefined) {\n  const text = String(x.Wunschzeitraum || '').trim().slice(0, 500);\n  return [{ json: Object.assign({}, E, { aktion: 'kundenantwort', kunden_nachricht: text, antwort_vorhanden: text.length > 0, notfall: false }) }];\n}\nconst wahl = String(x.Wunschtermin || x.wunschtermin || '').trim();\nconst treffer = wahl.match(/^(\\d)\\)/);\nconst keiner = wahl === 'Keiner dieser Termine passt';\nreturn [{ json: Object.assign({}, E, { aktion: 'bestaetigen', kunden_nachricht: treffer ? treffer[1] : (keiner ? 'keiner' : ''), antwort_vorhanden: Boolean(treffer) || keiner, notfall: false }) }];\n"
+      },
+      "id": "e0ef2a2c-fb4e-4987-9e7c-921552eadf43",
+      "name": "Kundenauswahl übernehmen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6704,
+        2112
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "tg-ok",
+              "leftValue": "={{ $json.antwort_vorhanden === true }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "a1badf7b-7ae1-41ec-b030-f6a6a011f0bd",
+      "name": "Kundenantwort vorhanden?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        6928,
+        2016
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SUBWORKFLOW_ID",
+          "cachedResultName": "AI Terminassistent – SHK"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "80d6acb9-26ee-48e5-8deb-089655913983",
+      "name": "Terminassistent: Bestätigung (Website)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        7152,
+        2064
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "={{ ['gebucht', 'bereits_gebucht'].includes($json.ergebnis) && $json.termin ? 'Ihr Termin ist gebucht' : 'Vielen Dank – Ihre Anfrage ist eingegangen' }}",
+        "completionMessage": "={{ (['gebucht', 'bereits_gebucht'].includes($json.ergebnis) && $json.termin) ? $json.kunden_nachricht : ($json.ergebnis === 'vorgeschlagen' ? 'Der gewählte Termin ist leider nicht mehr verfügbar. Unser Serviceteam meldet sich mit einem neuen Terminvorschlag.' : (($json.kunden_nachricht && !$json.error) ? $json.kunden_nachricht : $('Betriebskonfiguration').first().json.betrieb.text_standardantwort)) }}",
+        "options": {}
+      },
+      "id": "e193181a-7abd-4497-9134-9cfcbf2bd2a1",
+      "name": "Website-Terminergebnis",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        7600,
+        2128
+      ],
+      "webhookId": "de0c619e-10e6-4b39-99e0-deb1c947d2be"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Mitarbeiterinformation nur für erfolgreich gebuchte, verschobene oder stornierte Termine.\nconst x = $input.first().json || {};\nconst c = $('Betriebskonfiguration').first().json.betrieb;\nconst info = x.mitarbeiter_info;\nif (!info || !['gebucht', 'verschoben', 'storniert'].includes(x.ergebnis)) return [];\nconst esc = s => String(s ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');\nreturn [{ json: {\n  empfaenger: c.mitarbeiter_email,\n  betreff: '📅 ' + info.betreff,\n  html: '<p style=\"font-family:Arial,sans-serif\">' + esc(info.text).replace(/\\n/g, '<br>') + '</p>'\n    + '<p style=\"font-family:Arial,sans-serif;color:#555\">Automatisch durch den Terminassistenten verarbeitet. Details stehen in der Aufgabe zur Anfrage.</p>',\n  wichtigkeit: 'Normal'\n} }];\n"
+      },
+      "id": "ef236566-23df-4554-b20a-8fd0bf96d976",
+      "name": "Terminbenachrichtigung vorbereiten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7376,
+        1920
+      ]
+    },
+    {
+      "parameters": {
+        "toRecipients": "={{ $json.empfaenger }}",
+        "subject": "={{ $json.betreff }}",
+        "bodyContent": "={{ $json.html }}",
+        "additionalFields": {
+          "importance": "={{ $json.wichtigkeit }}",
+          "bodyContentType": "html"
+        }
+      },
+      "id": "9d3a64f5-4bc9-45ce-a758-19b6c6bedaf5",
+      "name": "Mitarbeiter über Termin informieren",
+      "type": "n8n-nodes-base.microsoftOutlook",
+      "typeVersion": 2,
+      "position": [
+        7600,
+        1920
+      ],
+      "webhookId": "e02bcdf4-e329-4b70-a49b-1581d9a3b165",
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "vapi-termine",
+        "authentication": "headerAuth",
+        "responseMode": "lastNode",
+        "options": {}
+      },
+      "id": "cc550bd4-836e-4cd0-82fd-a201ea1be665",
+      "name": "Vapi-Terminfunktionen",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -1840,
+        2336
+      ],
+      "webhookId": "1aefd81f-cd12-4a2e-9c96-29dc72d9c924",
+      "credentials": {
+        "httpHeaderAuth": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_WEBHOOK_HEADER_AUTH_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Vapi-Tool-Aufruf lesen und absichern. Nur zwei Funktionen sind erlaubt.\nconst body = $('Vapi-Terminfunktionen').first().json.body || {};\nconst msg = body.message || {};\nconst calls = msg.toolCallList || msg.toolCalls || [];\nconst call = calls[0] || {};\nconst fn = call.function || {};\nlet args = fn.arguments;\nif (typeof args === 'string') { try { args = JSON.parse(args); } catch (e) { args = {}; } }\nargs = args && typeof args === 'object' ? args : {};\nconst callId = String((msg.call && msg.call.id) || '').trim();\nconst anrufer = String((msg.customer && msg.customer.number) || (msg.call && msg.call.customer && msg.call.customer.number) || '').trim();\nlet funktion = ['freie_termine_pruefen', 'termin_buchen'].includes(fn.name) && call.id && callId ? fn.name : 'unbekannt';\nif (funktion === 'termin_buchen') {\n  const startOk = DateTime.fromISO(String(args.termin_start_utc || ''), { zone: 'utc' }).isValid;\n  if (args.anrufer_hat_bestaetigt !== true || !startOk) funktion = 'unvollstaendig';\n}\nreturn [{ json: { funktion, tool_call_id: String(call.id || ''), call_id: callId, anrufer, args } }];\n"
+      },
+      "id": "c6935232-a7e6-4dd6-971f-f653c471b0c7",
+      "name": "Vapi-Toolaufruf lesen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        5232,
+        2992
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "vf-0",
+                    "leftValue": "={{ $json.funktion }}",
+                    "rightValue": "freie_termine_pruefen",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "freie_termine_pruefen"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "vf-1",
+                    "leftValue": "={{ $json.funktion }}",
+                    "rightValue": "termin_buchen",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "termin_buchen"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "nicht ausführbar"
+        }
+      },
+      "id": "59fc74d0-58bc-4416-affa-637f72f3b36a",
+      "name": "Vapi-Terminfunktion",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        5520,
+        2976
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const t = $('Vapi-Toolaufruf lesen').first().json;\nconst a = t.args || {};\n// Die Anfrage zum Anruf wurde vorher gesucht oder angelegt. Alle Werkzeugaufrufe desselben\n// Anrufs arbeiten auf derselben Anfrage, damit keine zweite Anfrage entsteht.\nconst such = $('Anruf-Anfrage suchen').first().json;\nlet id = Array.isArray(such.body) && such.body[0] ? such.body[0].id : '';\nfor (const n of ['Anruf-Anfrage anlegen', 'Anruf-Anfrage nach Konflikt suchen']) {\n  if (id || !$(n).isExecuted) continue;\n  try { const r = $(n).first().json; id = Array.isArray(r.body) && r.body[0] ? r.body[0].id : ''; } catch (e) { id = ''; }\n}\nreturn [{ json: {\n  aktion: 'verfuegbarkeit',\n  kanal: 'telefon',\n  betrieb: $('Betriebskonfiguration').first().json.betrieb,\n  kunden_nachricht: '',\n  // Bereits genannte, vom Anrufer abgelehnte Termine werden nie erneut angeboten.\n  wunsch: { abgelehnte_termine_utc: Array.isArray(a.abgelehnte_termine_utc) ? a.abgelehnte_termine_utc.slice(0, 30).map(String) : [] },\n  anfrage: {\n    anfrage_db_id: id || null, anfrage_id: t.call_id,\n    kategorie: String(a.kategorie || ''), dringlichkeit: String(a.dringlichkeit || 'normal'),\n    technisches_anliegen: String(a.anliegen || ''), fehlende_informationen: 'keine',\n    adresse: String(a.adresse || ''), plz: String(a.plz || ''), ort: String(a.ort || ''),\n    telefon: String(a.telefon || t.anrufer || ''), terminart: String(a.terminart || '')\n  }\n} }];\n"
+      },
+      "id": "a29215c9-d10d-4f67-91ea-e5c3e1fa6df6",
+      "name": "Telefon-Terminprüfung vorbereiten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6928,
+        2656
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SUBWORKFLOW_ID",
+          "cachedResultName": "AI Terminassistent – SHK"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "95e980cb-1a12-479e-ac37-0a44f329821b",
+      "name": "Terminassistent: Verfügbarkeit (Telefon)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        7152,
+        2656
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Betriebskonfiguration').first().json.betrieb.supabase_url + '/rest/v1/anfragen' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "select",
+              "value": "id,aufgaben(id,typ,beschreibung)"
+            },
+            {
+              "name": "betrieb_id",
+              "value": "={{ 'eq.' + $('Betriebskonfiguration').first().json.betrieb.betrieb_id }}"
+            },
+            {
+              "name": "anfrage_id",
+              "value": "={{ 'eq.' + ($('Vapi-Toolaufruf lesen').first().json.call_id || '__keine_anruf_id__') }}"
+            },
+            {
+              "name": "limit",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "f35eb586-9484-4543-a03d-f0f698ad39d7",
+      "name": "Anruf-Anfrage suchen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        5808,
+        3312
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "av-ok",
+              "leftValue": "={{ $json.statusCode === 200 && Array.isArray($json.body) && $json.body.length > 0 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "de5de5ca-73a2-4aed-b1e1-2902cfc8f473",
+      "name": "Anruf-Anfrage vorhanden?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        6032,
+        3328
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Betriebskonfiguration').first().json.betrieb.supabase_url + '/rest/v1/anfragen' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify((() => { const t = $('Vapi-Toolaufruf lesen').first().json; const a = t.args || {}; const c = $('Betriebskonfiguration').first().json.betrieb; const kat = ['Heizungsstörung', 'Wasserschaden', 'Wartung', 'Neuinstallation', 'Angebotsanfrage', 'Sonstiges']; const dr = ['niedrig', 'normal', 'hoch', 'notfall']; const d = String(a.dringlichkeit || '').toLowerCase(); const roh = String(a.telefon || t.anrufer || '').trim(); const ziffern = roh.replace(/\\D/g, ''); const tel = !ziffern ? '' : roh.startsWith('+') ? '+' + ziffern : ziffern.startsWith('00') ? '+' + ziffern.slice(2) : ziffern.startsWith('0') ? '+49' + ziffern.slice(1) : '+' + ziffern; const plz = /^\\d{5}$/.test(String(a.plz || '')) ? String(a.plz) : null; return { betrieb_id: c.betrieb_id, anfrage_id: t.call_id, quelle: 'Telefon', technisches_anliegen: String(a.anliegen || '').slice(0, 2000), kategorie: kat.includes(a.kategorie) ? a.kategorie : 'Sonstiges', hersteller: 'Unbekannt', geraet: 'Unbekannt', fehlercode: 'Unbekannt', warmwasser: 'Unbekannt', dringlichkeit: dr.includes(d) ? d : 'normal', fehlende_informationen: 'keine', status: 'neu', telefon: tel, plz: plz, konversation_status: 'offen' }; })()) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "ec1b0a0a-cfe6-4fff-88dc-531f72463c02",
+      "name": "Anruf-Anfrage anlegen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        6256,
+        3424
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Betriebskonfiguration').first().json.betrieb.supabase_url + '/rest/v1/aufgaben?on_conflict=anfrage_db_id,typ' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify((() => { const t = $('Vapi-Toolaufruf lesen').first().json; const a = t.args || {}; const c = $('Betriebskonfiguration').first().json.betrieb; const erste = n => { try { const r = $(n).first().json; return Array.isArray(r.body) && r.body[0] ? r.body[0].id : ''; } catch (e) { return ''; } }; const id = erste('Anruf-Anfrage anlegen') || ($('Anruf-Anfrage nach Konflikt suchen').isExecuted ? erste('Anruf-Anfrage nach Konflikt suchen') : ''); const dr = ['niedrig', 'normal', 'hoch', 'notfall']; const d = String(a.dringlichkeit || '').toLowerCase(); return { betrieb_id: c.betrieb_id, anfrage_db_id: id, typ: 'anfrage_pruefen', titel: 'Telefonanfrage (Terminfunktion): ' + (a.kategorie || 'Sonstiges'), beschreibung: 'Anfrage ' + t.call_id + ' über Telefon: ' + String(a.anliegen || '').slice(0, 1500), prioritaet: dr.includes(d) ? d : 'normal', status: 'offen', freigabe_erforderlich: true }; })()) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "79bd6e10-88e3-43d6-a47d-b717b235adab",
+      "name": "Anruf-Aufgabe anlegen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        6704,
+        3312
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Buchung nur mit gespeicherter Anfrage und ausdrücklich bestätigtem, vom Terminworkflow geliefertem Termin.\nconst t = $('Vapi-Toolaufruf lesen').first().json;\nconst a = t.args || {};\nconst such = $('Anruf-Anfrage suchen').first().json;\nlet id = Array.isArray(such.body) && such.body[0] ? such.body[0].id : '';\n// Neu angelegt oder – bei parallelem Aufruf derselben Anruf-ID – nach dem Datenbankkonflikt wiedergefunden.\nfor (const n of ['Anruf-Anfrage anlegen', 'Anruf-Anfrage nach Konflikt suchen']) {\n  if (id || !$(n).isExecuted) continue;\n  try { const r = $(n).first().json; id = Array.isArray(r.body) && r.body[0] ? r.body[0].id : ''; } catch (e) { id = ''; }\n}\nif (!id) return [{ json: { error: 'Anruf-Anfrage nicht verfügbar' } }];\nreturn [{ json: {\n  aktion: 'direkt_buchen',\n  kanal: 'telefon',\n  betrieb: $('Betriebskonfiguration').first().json.betrieb,\n  wunsch: { start_utc: String(a.termin_start_utc || '') },\n  kunden_nachricht: '',\n  anfrage: {\n    anfrage_db_id: id, anfrage_id: t.call_id,\n    kategorie: String(a.kategorie || ''), dringlichkeit: String(a.dringlichkeit || 'normal'),\n    technisches_anliegen: String(a.anliegen || ''), fehlende_informationen: 'keine',\n    adresse: String(a.adresse || ''), plz: String(a.plz || ''), ort: String(a.ort || ''),\n    telefon: String(a.telefon || t.anrufer || ''), terminart: String(a.terminart || '')\n  }\n} }];\n"
+      },
+      "id": "9c9d8660-c901-4dc4-8f91-2a66785a8cdd",
+      "name": "Telefon-Buchung vorbereiten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        6928,
+        3088
+      ]
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_SUBWORKFLOW_ID",
+          "cachedResultName": "AI Terminassistent – SHK"
+        },
+        "options": {
+          "waitForSubWorkflow": true
+        }
+      },
+      "id": "ace82f8d-d417-4dff-8551-cc8c1069ceef",
+      "name": "Terminassistent: Buchung (Telefon)",
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        7152,
+        3088
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Antwort für Vapi: nur Termine aus dem Terminworkflow, nie erfundene Uhrzeiten.\nconst t = $('Vapi-Toolaufruf lesen').first().json;\n// Das Ergebnis kommt immer vom Terminassistenten. Zwischengeschaltete Speicherschritte\n// duerfen die Antwort an Vapi nicht veraendern.\nconst quelle = ['Terminassistent: Verfügbarkeit (Telefon)', 'Terminassistent: Buchung (Telefon)']\n  .find(n => { try { return $(n).isExecuted; } catch (e) { return false; } });\nconst x = (quelle ? $(quelle).first().json : $input.first().json) || {};\nconst v = Array.isArray(x.vorschlaege) ? x.vorschlaege : [];\nconst gr = Array.isArray(x.gruende) ? x.gruende.map(String) : [];\nconst liste = () => v.map(s => s.nummer + ') ' + s.anzeige + ' [termin_start_utc=' + s.start_utc + ']').join('; ');\n\n// Vier Fälle sauber trennen: fehlende Angaben, wirklich keine freien Termine,\n// technischer Fehler und Buchungssperre im Testbetrieb. Fehlende Angaben werden\n// nie als \"keine Termine frei\" dargestellt.\nconst fehlt = [];\nif (gr.some(g => /^PLZ (fehlt|ungültig)/.test(g))) fehlt.push('die fünfstellige Postleitzahl des Einsatzortes');\nif (gr.some(g => /^Adresse fehlt/.test(g))) fehlt.push('die vollständige Adresse mit Hausnummer');\nif (gr.some(g => /^Telefonnummer fehlt/.test(g))) fehlt.push('die Rückrufnummer');\nif (gr.some(g => /^Anliegen unklar/.test(g))) fehlt.push('eine kurze, konkrete Beschreibung des Anliegens');\nconst offen = gr.find(g => /^Angaben unvollständig:/.test(g));\nif (offen) fehlt.push(offen.replace(/^Angaben unvollständig:\\s*/, ''));\nconst keineTermine = gr.some(g => /^Keine freien Termine/.test(g));\nconst nachfrage = ' Fragen Sie genau diese Angaben nacheinander ab, wiederholen Sie sie zur Bestätigung und rufen Sie freie_termine_pruefen danach erneut auf – mit allen bereits bekannten Angaben. Sagen Sie ausdrücklich nicht, dass keine Termine frei sind.';\n\nlet text;\nif (t.funktion === 'unbekannt') text = 'Diese Funktion ist nicht verfügbar. Nennen Sie keine Termine; nehmen Sie das Anliegen auf, das Serviceteam meldet sich.';\nelse if (t.funktion === 'unvollstaendig') text = 'Nicht gebucht. Nennen Sie dem Anrufer zuerst genau einen der gelieferten Termine, holen Sie eine ausdrückliche Bestätigung ein und übergeben Sie termin_start_utc exakt wie geliefert sowie anrufer_hat_bestaetigt = true.';\nelse if (x.error || !x.ergebnis) text = 'Technischer Fehler: Die Terminfunktion ist gerade nicht erreichbar. Das liegt weder an fehlenden Angaben noch an belegten Terminen. Nennen Sie keine Termine und sagen Sie, dass sich das Serviceteam zur Terminabstimmung meldet.';\nelse if (x.ergebnis === 'testmodus') text = (t.funktion === 'termin_buchen')\n  ? 'Nicht gebucht: Die verbindliche Buchung ist im Testbetrieb gesperrt, es wurde kein Termin gebucht. Es liegt weder an fehlenden Angaben noch an belegten Terminen. Sagen Sie dem Anrufer klar, dass der Termin noch nicht verbindlich ist und das Serviceteam sich zur Bestätigung meldet. Halten Sie den gewünschten Termin in der Gesprächszusammenfassung fest.'\n  : 'Terminfunktion im Testbetrieb: verbindliche Buchungen sind gesperrt. Nennen Sie keine Termine; das Serviceteam meldet sich zur Terminabstimmung.';\nelse if (x.ergebnis === 'verfuegbar' && v.length) text = 'Freie Termine – nennen Sie nur diese, keine anderen Uhrzeiten: ' + liste() + '. Für die Buchung termin_start_utc exakt übernehmen und erst nach ausdrücklicher Bestätigung buchen. Passt keiner, freie_termine_pruefen erneut aufrufen und alle bereits genannten termin_start_utc in abgelehnte_termine_utc übergeben.';\nelse if ((x.ergebnis === 'gebucht' || x.ergebnis === 'bereits_gebucht') && x.termin) text = 'Termin verbindlich gebucht: ' + x.termin.anzeige + '. Bestätigen Sie dem Anrufer genau diesen Termin. Keine Preise oder Diagnosen nennen.';\nelse if (x.ergebnis === 'nicht_verfuegbar' && v.length) text = 'Nicht gebucht: der gewünschte Termin ist nicht mehr frei. Alternativ frei: ' + liste() + '. Erst nach neuer ausdrücklicher Bestätigung buchen.';\nelse if (!x.notfall && fehlt.length) text = 'Noch keine Terminprüfung möglich: Es fehlen noch ' + fehlt.join(' sowie ') + '.' + nachfrage;\nelse if (x.ergebnis === 'zeitraum_erfragen') text = 'Keine weiteren Termine anbieten. Fragen Sie den Anrufer nach seinem bevorzugten Zeitraum (Wochentage und Uhrzeiten) und nehmen Sie ihn in das Gespräch auf. Das Serviceteam erhält die Anfrage als Aufgabe und meldet sich persönlich.';\nelse if (!x.notfall && keineTermine) text = 'Angaben vollständig, aber im Planungszeitraum ist kein Termin frei. Das liegt nicht an fehlenden Angaben. Sagen Sie das offen, fragen Sie nach dem bevorzugten Zeitraum und kündigen Sie an, dass das Serviceteam einen passenden Termin persönlich abstimmt.';\nelse text = 'Keine automatische Terminvergabe möglich' + (x.notfall ? ' (Notfall – folgen Sie der Notfallvorgabe des Betriebs)' : '') + '. Das liegt weder an fehlenden Angaben des Anrufers noch an belegten Terminen. Nennen Sie keine Termine; das Serviceteam meldet sich persönlich.';\n\nreturn [{ json: { results: [{ toolCallId: t.tool_call_id, result: text }] } }];\n"
+      },
+      "id": "96b92a7d-29d0-42b1-9cb2-b58c99da6ae9",
+      "name": "Vapi-Antwort vorbereiten",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        7376,
+        3072
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Betriebskonfiguration').first().json.betrieb.supabase_url + '/rest/v1/anfragen' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "select",
+              "value": "id"
+            },
+            {
+              "name": "betrieb_id",
+              "value": "={{ 'eq.' + $('Betriebskonfiguration').first().json.betrieb.betrieb_id }}"
+            },
+            {
+              "name": "anfrage_id",
+              "value": "={{ 'eq.' + ($json.anfrage_id || '__keine_anruf_id__') }}"
+            },
+            {
+              "name": "quelle",
+              "value": "eq.Telefon"
+            },
+            {
+              "name": "limit",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true,
+              "neverError": true
+            }
+          }
+        }
+      },
+      "id": "a4b51662-dd35-4525-8a0d-efc7f4ba4cd0",
+      "name": "Anruf-Anfrage aus Terminbuchung suchen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1072,
+        1824
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 1000,
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Wurde während des Anrufs bereits ein Termin gebucht, existiert die Anfrage schon: ergänzen statt doppelt anlegen.\nconst v = $('Vapi-Daten standardisieren').first().json;\nconst r = $input.first().json || {};\nconst treffer = r.statusCode === 200 && Array.isArray(r.body) && r.body[0] ? r.body[0].id : '';\nreturn [{ json: Object.assign({}, v, { bestehende_anfrage_db_id: treffer || v.bestehende_anfrage_db_id || '' }) }];\n"
+      },
+      "id": "e3de9e82-b6dc-4b20-86b3-8f809c9e72ea",
+      "name": "Bestehende Anruf-Anfrage übernehmen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1296,
+        1824
+      ]
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "tw-0",
+                    "leftValue": "={{ $json.ergebnis === 'vorgeschlagen' && Array.isArray($json.vorschlaege) && $json.vorschlaege.length > 0 }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "weitere Vorschläge"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 2
+                },
+                "conditions": [
+                  {
+                    "id": "tw-1",
+                    "leftValue": "={{ $json.ergebnis === 'zeitraum_erfragen' }}",
+                    "rightValue": "",
+                    "operator": {
+                      "type": "boolean",
+                      "operation": "true",
+                      "singleValue": true
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "Wunschzeitraum erfragen"
+            }
+          ]
+        },
+        "options": {
+          "fallbackOutput": "extra",
+          "renameFallbackOutput": "Ergebnis anzeigen"
+        }
+      },
+      "id": "c3371c8f-9b36-4623-9664-b5c9b1465d25",
+      "name": "Terminergebnis auswerten (Website)",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.2,
+      "position": [
+        7376,
+        2160
+      ]
+    },
+    {
+      "parameters": {
+        "defineForm": "json",
+        "jsonOutput": "={{ JSON.stringify([{ fieldLabel: 'Wunschzeitraum', fieldType: 'textarea', requiredField: true, placeholder: 'z. B. nächste Woche vormittags oder ab dem 20. nachmittags' }]) }}",
+        "limitWaitTime": true,
+        "resumeAmount": 30,
+        "resumeUnit": "minutes",
+        "options": {
+          "formTitle": "Ihr Wunschzeitraum",
+          "formDescription": "={{ $json.kunden_nachricht }}",
+          "buttonLabel": "Wunschzeitraum senden"
+        }
+      },
+      "id": "aaa16149-3ead-4b79-82a4-de7176a143d9",
+      "name": "Bevorzugter Zeitraum (Website)",
+      "type": "n8n-nodes-base.form",
+      "typeVersion": 2.5,
+      "position": [
+        7600,
+        2352
+      ],
+      "webhookId": "285e42dc-5143-4c1f-91c8-9e600ebcd7d7"
+    },
+    {
+      "parameters": {
+        "url": "={{ $('Betriebskonfiguration').first().json.betrieb.supabase_url + '/rest/v1/anfragen' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "select",
+              "value": "id"
+            },
+            {
+              "name": "betrieb_id",
+              "value": "={{ 'eq.' + $('Betriebskonfiguration').first().json.betrieb.betrieb_id }}"
+            },
+            {
+              "name": "anfrage_id",
+              "value": "={{ 'eq.' + ($('Vapi-Toolaufruf lesen').first().json.call_id || '__keine_anruf_id__') }}"
+            },
+            {
+              "name": "limit",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "id": "44066c3f-89cc-406e-8a96-b59131d39878",
+      "name": "Anruf-Anfrage nach Konflikt suchen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        6480,
+        3520
+      ],
+      "onError": "continueErrorOutput",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "id": "cc0c3843-86de-40cd-9427-a3f5683438e0",
+      "name": "Prüfung starten",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        -2160,
+        2432
+      ],
+      "parameters": {},
+      "notes": "Startet ausschliesslich die Vorabpruefung der Betriebseinstellungen. Loest keine Kundenverarbeitung aus."
+    },
+    {
+      "id": "1058a4e9-5245-46bf-bf1a-b4c146c8afb4",
+      "name": "Betriebseinstellungen prüfen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -1180,
+        2432
+      ],
+      "parameters": {
+        "jsCode": "// Vorabpruefung der Betriebseinstellungen vor Inbetriebnahme.\n// Laeuft ausschliesslich ueber den Trigger \"Pruefung starten\".\n// Liest nur die zentrale Betriebskonfiguration: keine Kundendaten, keine Nachrichten,\n// keine Buchungen, kein Datenbank- und kein Kalenderzugriff.\nconst b = ($('Betriebskonfiguration').first().json || {}).betrieb || {};\nconst termin = b.termin || {};\nconst kalender = termin.kalender || {};\nconst outlook = kalender.outlook || {};\nconst gebiet = termin.einsatzgebiet || {};\nconst t = v => String(v ?? '').trim();\n\nconst OK = 'vollstaendig_eingerichtet';\nconst FEHLT = 'fehlende_einstellung';\nconst OFFEN = 'integration_nicht_angeschlossen';\nconst punkte = [];\nconst p = (bereich, status, befund, hinweis) => punkte.push({ bereich, status, befund, hinweis: hinweis || '' });\n\nconst UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;\np('Betriebskennung', UUID.test(t(b.betrieb_id)) ? OK : FEHLT, t(b.betrieb_id) || 'leer');\np('Firmenname', (t(b.firmenname) && !/bitte anpassen/i.test(t(b.firmenname))) ? OK : FEHLT, t(b.firmenname) || 'leer', 'Demo-Platzhalter ersetzen');\np('Datenbank Supabase', /^https:\\/\\/[^\\s\\/]+/.test(t(b.supabase_url)) ? OK : FEHLT, t(b.supabase_url) || 'leer');\n\nconst gPlz = (Array.isArray(gebiet.plz) ? gebiet.plz : []).map(x => t(x)).filter(Boolean);\nconst gOrte = (Array.isArray(gebiet.orte) ? gebiet.orte : []).map(x => t(x)).filter(Boolean);\np('Einsatzgebiet', (gPlz.length || gOrte.length) ? OK : FEHLT,\n  'PLZ-Liste: ' + (gPlz.join(', ') || 'keine') + ' | Ortsliste: ' + (gOrte.join(', ') || 'keine'),\n  gPlz.length ? 'Geprueft wird die PLZ-Liste als Praefix; die Ortsliste bleibt Rueckfallebene.'\n    : (gOrte.length ? 'Nur Ortsliste hinterlegt: greift nur, solange keine PLZ-Liste gesetzt ist.'\n      : 'Ohne Einsatzgebiet wird jede Terminanfrage an einen Mitarbeiter uebergeben.'));\n\np('Betriebsmodus', termin.modus === 'test' ? FEHLT : OK, 'modus = ' + (t(termin.modus) || 'leer'),\n  termin.modus === 'test' ? 'Testmodus aktiv: es werden keine echten Termine gebucht.' : '');\n\n[['text_standardantwort', 'Standardantwort'], ['text_standardantwort_notfall', 'Standardantwort Notfall'], ['text_sicherheit_wasser', 'Sicherheitstext Wasser'], ['text_sicherheit_gas', 'Sicherheitstext Gas']].forEach(function (e) {\n  const w = t(b[e[0]]);\n  p('Text: ' + e[1], (w && !/ENTWURF/i.test(w)) ? OK : FEHLT, w ? (/ENTWURF/i.test(w) ? 'noch als ENTWURF markiert, nicht freigegeben' : 'freigegeben') : 'leer');\n});\n\np('Betriebstelefon', t(b.betrieb_telefon) ? OK : FEHLT, t(b.betrieb_telefon) || 'leer');\n\nconst istTestadresse = e => !t(e).includes('@') || /^TEST_/i.test(t(e));\np('E-Mail an Mitarbeiter (Outlook)', istTestadresse(b.mitarbeiter_email) ? OFFEN : OK, t(b.mitarbeiter_email) || 'leer', 'Solange eine Testadresse hinterlegt ist, gilt der Versand als nicht nachgewiesen.');\np('E-Mail Fehleralarm (Outlook)', istTestadresse(b.fehleralarm_email) ? OFFEN : OK, t(b.fehleralarm_email) || 'leer', 'Solange eine Testadresse hinterlegt ist, gilt der Versand als nicht nachgewiesen.');\n\nif (kalender.anbieter === 'outlook') {\n  const bereitK = t(outlook.postfach).includes('@') && t(outlook.kalender_id);\n  p('Kalender Outlook', bereitK ? OK : FEHLT, 'Postfach: ' + (t(outlook.postfach) || 'leer') + ' | Kalender-ID: ' + (t(outlook.kalender_id) || 'leer'));\n} else {\n  p('Kalender Outlook', OFFEN, 'anbieter = ' + (t(kalender.anbieter) || 'leer') + ', Ressource = ' + (t(kalender.ressource_id) || 'leer'), 'Testkalender aktiv. Outlook ist nicht angebunden und der Kalenderweg ist nicht getestet.');\n}\n\np('Bereitschaft WhatsApp', t(b.bereitschaft_whatsapp) ? OK : OFFEN, t(b.bereitschaft_whatsapp) || 'leer', 'Notfallalarm an die Bereitschaft ist nicht nachgewiesen.');\np('WhatsApp-Absender', t(b.whatsapp_absender) ? OK : OFFEN, t(b.whatsapp_absender) || 'leer');\n\nconst n = s => punkte.filter(x => x.status === s).length;\nconst label = s => s === OK ? 'OK' : (s === FEHLT ? 'FEHLT' : 'NICHT ANGESCHLOSSEN');\nconst zeilen = punkte.map(x => '[' + label(x.status) + '] ' + x.bereich + ': ' + x.befund + (x.hinweis ? ' -- ' + x.hinweis : ''));\nconst bereit = n(FEHLT) === 0 && n(OFFEN) === 0;\nconst urteil = bereit\n  ? 'Vollstaendig eingerichtet.'\n  : n(FEHLT) + ' fehlende Einstellung(en), ' + n(OFFEN) + ' nicht angeschlossene Integration(en). Noch nicht betriebsbereit.';\n\nreturn [{ json: {\n  geprueft_am: new Date().toISOString(),\n  betrieb: t(b.firmenname),\n  betriebsbereit: bereit,\n  gesamturteil: urteil,\n  anzahl_ok: n(OK),\n  anzahl_fehlende_einstellungen: n(FEHLT),\n  anzahl_offene_integrationen: n(OFFEN),\n  bericht: urteil + '\\n\\n' + zeilen.join('\\n'),\n  punkte: punkte\n} }];\n"
+      },
+      "notes": "Vorabpruefung vor Inbetriebnahme. Liest nur die zentrale Betriebskonfiguration. Kein Versand, keine Buchung, kein DB-Zugriff."
+    },
+    {
+      "id": "76323804-8fce-45d9-9742-e770a9c5a4f4",
+      "name": "Telefonfunktion wählen",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        6704,
+        2880
+      ],
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "tf-pruefen",
+                    "leftValue": "={{ $('Vapi-Toolaufruf lesen').first().json.funktion }}",
+                    "rightValue": "freie_termine_pruefen",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "freie_termine_pruefen"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": true,
+                  "leftValue": "",
+                  "typeValidation": "strict",
+                  "version": 3
+                },
+                "combinator": "and",
+                "conditions": [
+                  {
+                    "id": "tf-buchen",
+                    "leftValue": "={{ $('Vapi-Toolaufruf lesen').first().json.funktion }}",
+                    "rightValue": "termin_buchen",
+                    "operator": {
+                      "type": "string",
+                      "operation": "equals"
+                    }
+                  }
+                ]
+              },
+              "renameOutput": true,
+              "outputKey": "termin_buchen"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "notes": "Verteilt nach dem Suchen oder Anlegen der Anruf-Anfrage auf Terminpruefung oder Buchung."
+    },
+    {
+      "id": "ace9d736-51f6-4551-96c8-b39bb49eed13",
+      "name": "Terminprüfung festhalten",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        7376,
+        2656
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{ $('Betriebskonfiguration').first().json.betrieb.supabase_url + '/rest/v1/aufgaben?on_conflict=anfrage_db_id,typ' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "resolution=merge-duplicates,return=representation"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify((() => {\n  const t = $('Vapi-Toolaufruf lesen').first().json;\n  const a = t.args || {};\n  const c = $('Betriebskonfiguration').first().json.betrieb;\n  const r = $('Terminassistent: Verfügbarkeit (Telefon)').first().json || {};\n  const p = ($('Telefon-Terminprüfung vorbereiten').first().json || {}).anfrage || {};\n  const dr = ['niedrig', 'normal', 'hoch', 'notfall'];\n  const d = String(a.dringlichkeit || '').toLowerCase();\n  const gr = (Array.isArray(r.gruende) && r.gruende.length) ? r.gruende.join('; ') : '';\n  const erg = r.ergebnis === 'verfuegbar'\n    ? 'Termine angeboten: ' + (Array.isArray(r.vorschlaege) ? r.vorschlaege.map(v => v.anzeige).join('; ') : '')\n    : 'Keine automatische Terminvergabe (' + (r.ergebnis || 'unbekannt') + '). Grund: ' + (gr || 'nicht angegeben');\n  // Vorhandene Beschreibung uebernehmen, damit spaetere Gespraechsdaten nicht verloren gehen;\n  // der Terminpruefungsblock wird immer neu gesetzt statt angehaengt (keine Textkopien).\n  let altBasis = '';\n  try {\n    const zeile = ((($('Anruf-Anfrage suchen').first().json || {}).body || [])[0] || {});\n    const altAufgabe = (zeile.aufgaben || []).find(x => x && x.typ === 'anfrage_pruefen') || {};\n    altBasis = String(altAufgabe.beschreibung || '').split(/Terminprüfung:/)[0].trim();\n  } catch (e) { altBasis = ''; }\n  const basis = altBasis || ('Anfrage ' + t.call_id + ' über Telefon: ' + String(a.anliegen || '').slice(0, 900));\n  return {\n    betrieb_id: c.betrieb_id,\n    anfrage_db_id: p.anfrage_db_id,\n    typ: 'anfrage_pruefen',\n    titel: 'Telefonanfrage (Terminprüfung): ' + (a.kategorie || 'Sonstiges'),\n    beschreibung: (basis + String.fromCharCode(10) + 'Terminprüfung: ' + erg).slice(0, 1800),\n    prioritaet: dr.includes(d) ? d : 'normal',\n    status: 'offen',\n    freigabe_erforderlich: true\n  };\n})()) }}",
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "notes": "Schreibt Ergebnis und Ablehnungsgrund der Terminpruefung in die Aufgabe zur Anfrage. Upsert auf (anfrage_db_id, typ), daher keine Doppelaufgaben.",
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "id": "2ddd9d0b-fa47-4412-856f-a89292212316",
+      "name": "Anfrage zum Vorgang suchen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        3936,
+        1568
+      ],
+      "parameters": {
+        "url": "={{ $('Betriebskonfiguration').first().json.betrieb.supabase_url + '/rest/v1/anfragen' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "select",
+              "value": "*,aufgaben(id,typ,titel,beschreibung)"
+            },
+            {
+              "name": "betrieb_id",
+              "value": "={{ 'eq.' + $('Betriebskonfiguration').first().json.betrieb.betrieb_id }}"
+            },
+            {
+              "name": "anfrage_id",
+              "value": "={{ 'eq.' + ($json.anfrage_id || '__kein_vorgang__') }}"
+            },
+            {
+              "name": "limit",
+              "value": "1"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "response": {
+              "fullResponse": true
+            }
+          }
+        }
+      },
+      "notes": "Sucht eine bereits gespeicherte Anfrage mit derselben Vorgangs-ID (anfrage_id). Nur lesend.",
+      "onError": "continueRegularOutput",
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    },
+    {
+      "id": "aa2a9a6a-f15a-4c79-9afb-57eceecc6aa8",
+      "name": "Bestehenden Vorgang übernehmen",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        4160,
+        1568
+      ],
+      "parameters": {
+        "jsCode": "// Dieselbe Vorgangs-ID bedeutet dieselbe Anfrage, unabhaengig vom Kanal.\n// Die bereits gespeicherten Werte werden als 'alt' mitgefuehrt; 'Anfrage ergaenzen'\n// faellt darauf zurueck, wenn der neue Wert leer oder ein Platzhalter ist.\nconst e = $('Kunden-ID vereinheitlichen').first().json || {};\nlet alt = {};\ntry {\n  const r = $('Anfrage zum Vorgang suchen').first().json || {};\n  if (Array.isArray(r.body) && r.body[0]) alt = r.body[0];\n} catch (err) { alt = {}; }\nreturn [{ json: Object.assign({}, e, {\n  bestehende_anfrage_db_id: e.bestehende_anfrage_db_id || alt.id || '',\n  alt: alt\n}) }];\n"
+      },
+      "notes": "Uebernimmt die gefundene Anfrage-ID und haelt die bereits gespeicherten Werte als 'alt' bereit, damit leere neue Werte nichts ueberschreiben."
+    },
+    {
+      "id": "b325677a-100e-4f4a-98de-396547ebfdea",
+      "name": "Belegt leerer Anruf?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        848,
+        1312
+      ],
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 3
+          },
+          "combinator": "and",
+          "conditions": [
+            {
+              "id": "leer-belegt",
+              "leftValue": "={{ (() => {\n  // Ein Anruf gilt nur als belegbar leer, wenn Gespraechsprotokoll UND Transkript vorliegen,\n  // darin kein Anruferbeitrag steht und auch keine Kundenangabe erfasst wurde. Fehlt eines\n  // davon, bleibt es ein ungeklaerter Fall fuer die bestehende Fehlerbehandlung.\n  const c = $('Vapi-Call abrufen').first().json || {};\n  const q = (c.artifact && Array.isArray(c.artifact.messages)) ? c.artifact.messages : (Array.isArray(c.messages) ? c.messages : null);\n  const roh = (c.artifact && typeof c.artifact.transcript === 'string') ? c.artifact.transcript : (typeof c.transcript === 'string' ? c.transcript : null);\n  if (!Array.isArray(q) || q.length === 0 || typeof roh !== 'string') return false;\n  const rollen = q.map(m => String((m || {}).role || '').toLowerCase());\n  if (rollen.some(x => x === 'user' || x === 'customer' || x === 'human')) return false;\n  if (rollen.some(x => x === 'tool' || x === 'function' || x.indexOf('tool_call') === 0)) return false;\n  const marken = ['user:', 'kunde:', 'customer:'];\n  const gesprochen = roh.split(String.fromCharCode(10)).some(zeile => {\n    const z = String(zeile).trim().toLowerCase();\n    const m = marken.find(x => z.indexOf(x) === 0);\n    return Boolean(m) && z.slice(String(m).length).trim() !== '';\n  });\n  if (gesprochen) return false;\n  const felder = ['name', 'telefon', 'ort', 'plz', 'adresse', 'technisches_anliegen'];\n  if (felder.some(f => String($json[f] || '').trim() !== '')) return false;\n  if ($json.vapi_datenquelle === 'zusammenfassung') return false;\n  return true;\n})() }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ]
+        },
+        "options": {}
+      }
+    },
+    {
+      "id": "b8efb7c8-9879-48df-81c5-7171de277f3c",
+      "name": "Leeren Anruf abschließen",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.5,
+      "position": [
+        1072,
+        1472
+      ],
+      "parameters": {
+        "method": "PATCH",
+        "url": "={{ $('Betriebskonfiguration').first().json.betrieb.supabase_url + '/rest/v1/eingaenge' }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "supabaseApi",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "betrieb_id",
+              "value": "={{ 'eq.' + $('Betriebskonfiguration').first().json.betrieb.betrieb_id }}"
+            },
+            {
+              "name": "kanal",
+              "value": "eq.telefon"
+            },
+            {
+              "name": "externe_id",
+              "value": "={{ 'in.(' + ($json.eingang_ids || $json.anfrage_id) + ')' }}"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Prefer",
+              "value": "return=minimal"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ status: 'verarbeitet', verarbeitet_at: $now.toISO(), anfrage_db_id: null }) }}",
+        "options": {},
+        "notes": "Leerer Anruf ohne Anrufer-Beitrag: Eingang wird abgeschlossen, ohne Vorgang und ohne Fehleralarm. Erlaubte Statuswerte laut eingaenge_status_check: empfangen, verarbeitet, fehler."
+      },
+      "credentials": {
+        "supabaseApi": {
+          "id": "YOUR_CREDENTIAL_ID",
+          "name": "YOUR_SUPABASE_CREDENTIAL"
+        }
+      }
+    }
+  ],
+  "connections": {
+    "Twilio-Nachrichten abrufen": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp-Nachrichten aufteilen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp-Nachrichten aufteilen": {
+      "main": [
+        [
+          {
+            "node": "Nur eingehende Nachrichten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Offene WhatsApp-Anfrage suchen": {
+      "main": [
+        [
+          {
+            "node": "Bisherige Anfrage vorbereiten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bisherige Anfrage vorbereiten": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp-Kontext zusammenführen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Website-Eingang standardisieren": {
+      "main": [
+        [
+          {
+            "node": "Kontaktdaten behalten",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "KI-Eingabe minimieren",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kontaktdaten behalten": {
+      "main": [
+        [
+          {
+            "node": "Daten zusammenführen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "KI-Eingabe minimieren": {
+      "main": [
+        [
+          {
+            "node": "Anfrage mit KI analysieren",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anfrage mit KI analysieren": {
+      "main": [
+        [
+          {
+            "node": "Daten zusammenführen",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Auf Structured Output warten": {
+      "main": [
+        [
+          {
+            "node": "Vapi-Call abrufen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vapi-Call abrufen": {
+      "main": [
+        [
+          {
+            "node": "Vapi-Daten standardisieren",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daten vereinheitlichen": {
+      "main": [
+        [
+          {
+            "node": "Kunde suchen",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Kundendaten zusammenführen",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Anfrage ergänzen": {
+      "main": [
+        [
+          {
+            "node": "Mitarbeiterprüfung aktualisieren",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp-Kontext zusammenführen": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp-Kontext vorbereiten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Daten zusammenführen": {
+      "main": [
+        [
+          {
+            "node": "Daten vereinheitlichen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp-Kontext vorbereiten": {
+      "main": [
+        [
+          {
+            "node": "Kontaktdaten behalten",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "KI-Eingabe minimieren",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kunde vorhanden?": {
+      "main": [
+        [
+          {
+            "node": "Kunden-ID vereinheitlichen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Kunde anlegen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bestehende Anfrage?": {
+      "main": [
+        [
+          {
+            "node": "Anfrage ergänzen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Anfrage speichern",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anfrage speichern": {
+      "main": [
+        [
+          {
+            "node": "Mitarbeiterprüfung anlegen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kunde anlegen": {
+      "main": [
+        [
+          {
+            "node": "Kunden-ID vereinheitlichen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Nur eingehende Nachrichten": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp-API-Daten standardisieren",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Modell – Analyse": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "Anfrage mit KI analysieren",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "OpenAI Modell – WhatsApp-Antwort": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "WhatsApp-Antwort formulieren",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kunde suchen": {
+      "main": [
+        [
+          {
+            "node": "Kundensuche vorbereiten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kundensuche vorbereiten": {
+      "main": [
+        [
+          {
+            "node": "Kundendaten zusammenführen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kundendaten zusammenführen": {
+      "main": [
+        [
+          {
+            "node": "Kunde vorhanden?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp-Nachrichten je Nummer bündeln": {
+      "main": [
+        [
+          {
+            "node": "Offene WhatsApp-Anfrage suchen",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "WhatsApp-Kontext zusammenführen",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Vapi-Daten standardisieren": {
+      "main": [
+        [
+          {
+            "node": "Vapi-Daten verwertbar?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vapi-Daten verwertbar?": {
+      "main": [
+        [
+          {
+            "node": "Anruf-Anfrage aus Terminbuchung suchen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Belegt leerer Anruf?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Structured Output vorhanden?": {
+      "main": [
+        [
+          {
+            "node": "Daten vereinheitlichen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Kontaktdaten behalten",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "KI-Eingabe minimieren",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Betriebskonfiguration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Website-Anfrage – Demo": {
+      "main": [
+        [
+          {
+            "node": "Betriebskonfiguration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vapi-Telefonassistent": {
+      "main": [
+        [
+          {
+            "node": "Betriebskonfiguration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Error Trigger": {
+      "main": [
+        [
+          {
+            "node": "Betriebskonfiguration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Betriebskonfiguration": {
+      "main": [
+        [
+          {
+            "node": "Eingangskanal",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Eingangskanal": {
+      "main": [
+        [
+          {
+            "node": "Twilio-Nachrichten abrufen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Website-Eingang standardisieren",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Ist Abschlussbericht?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fehleralarm vorbereiten",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Vapi-Toolaufruf lesen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Betriebseinstellungen prüfen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mitarbeiterprüfung aktualisieren": {
+      "main": [
+        [
+          {
+            "node": "Speicherung erfolgreich",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Mitarbeiterprüfung anlegen": {
+      "main": [
+        [
+          {
+            "node": "Speicherung erfolgreich",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Speicherung erfolgreich": {
+      "main": [
+        [
+          {
+            "node": "Benachrichtigung vorbereiten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Benachrichtigung vorbereiten": {
+      "main": [
+        [
+          {
+            "node": "Mitarbeiter per E-Mail informieren",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Notfall?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Kunde per WhatsApp antworten?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Website-Anfrage?",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Eingang erfasst?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Notfall?": {
+      "main": [
+        [
+          {
+            "node": "Bereitschaft alarmieren",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kunde per WhatsApp antworten?": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp-Antwort formulieren",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp-Antwort formulieren": {
+      "main": [
+        [
+          {
+            "node": "KI-Antwort prüfen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "KI-Antwort prüfen": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp-Antwort senden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fehleralarm vorbereiten": {
+      "main": [
+        [
+          {
+            "node": "Fehleralarm senden",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp-API-Daten standardisieren": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp-Eingänge prüfen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp-Eingänge prüfen": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp-Eingänge auswählen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp-Eingänge auswählen": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp-Eingänge erfassen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "WhatsApp-Eingänge erfassen": {
+      "main": [
+        [
+          {
+            "node": "Zu verarbeitende Nachrichten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Zu verarbeitende Nachrichten": {
+      "main": [
+        [
+          {
+            "node": "WhatsApp-Nachrichten je Nummer bündeln",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Ist Abschlussbericht?": {
+      "main": [
+        [
+          {
+            "node": "Vapi-Eingang prüfen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vapi-Eingang prüfen": {
+      "main": [
+        [
+          {
+            "node": "Vapi-Eingang auswählen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vapi-Eingang auswählen": {
+      "main": [
+        [
+          {
+            "node": "Vapi-Eingang erfassen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vapi-Eingang erfassen": {
+      "main": [
+        [
+          {
+            "node": "Auf Structured Output warten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Eingang erfasst?": {
+      "main": [
+        [
+          {
+            "node": "Eingang als verarbeitet markieren",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Website-Anfrage?": {
+      "main": [
+        [
+          {
+            "node": "Automatische Terminierung versuchen?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Automatische Terminierung versuchen?": {
+      "main": [
+        [
+          {
+            "node": "Terminassistent: Eingabe (Website)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Formular-Bestätigung",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Terminassistent: Eingabe (Website)": {
+      "main": [
+        [
+          {
+            "node": "Terminassistent: Vorschläge (Website)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Terminassistent: Vorschläge (Website)": {
+      "main": [
+        [
+          {
+            "node": "Termine zur Auswahl?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Termine zur Auswahl?": {
+      "main": [
+        [
+          {
+            "node": "Terminauswahl (Website)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Formular-Bestätigung",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Terminauswahl (Website)": {
+      "main": [
+        [
+          {
+            "node": "Kundenauswahl übernehmen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Terminassistent: Bestätigung (Website)": {
+      "main": [
+        [
+          {
+            "node": "Terminbenachrichtigung vorbereiten",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Terminergebnis auswerten (Website)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Terminbenachrichtigung vorbereiten": {
+      "main": [
+        [
+          {
+            "node": "Mitarbeiter über Termin informieren",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vapi-Terminfunktionen": {
+      "main": [
+        [
+          {
+            "node": "Betriebskonfiguration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vapi-Toolaufruf lesen": {
+      "main": [
+        [
+          {
+            "node": "Vapi-Terminfunktion",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Vapi-Terminfunktion": {
+      "main": [
+        [
+          {
+            "node": "Anruf-Anfrage suchen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Anruf-Anfrage suchen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Vapi-Antwort vorbereiten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telefon-Terminprüfung vorbereiten": {
+      "main": [
+        [
+          {
+            "node": "Terminassistent: Verfügbarkeit (Telefon)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anruf-Anfrage suchen": {
+      "main": [
+        [
+          {
+            "node": "Anruf-Anfrage vorhanden?",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Vapi-Antwort vorbereiten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anruf-Anfrage vorhanden?": {
+      "main": [
+        [
+          {
+            "node": "Telefonfunktion wählen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Anruf-Anfrage anlegen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anruf-Anfrage anlegen": {
+      "main": [
+        [
+          {
+            "node": "Anruf-Aufgabe anlegen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Anruf-Anfrage nach Konflikt suchen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anruf-Aufgabe anlegen": {
+      "main": [
+        [
+          {
+            "node": "Telefonfunktion wählen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Vapi-Antwort vorbereiten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telefon-Buchung vorbereiten": {
+      "main": [
+        [
+          {
+            "node": "Terminassistent: Buchung (Telefon)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Terminassistent: Buchung (Telefon)": {
+      "main": [
+        [
+          {
+            "node": "Vapi-Antwort vorbereiten",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Terminbenachrichtigung vorbereiten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anruf-Anfrage aus Terminbuchung suchen": {
+      "main": [
+        [
+          {
+            "node": "Bestehende Anruf-Anfrage übernehmen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bestehende Anruf-Anfrage übernehmen": {
+      "main": [
+        [
+          {
+            "node": "Structured Output vorhanden?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kundenauswahl übernehmen": {
+      "main": [
+        [
+          {
+            "node": "Kundenantwort vorhanden?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kundenantwort vorhanden?": {
+      "main": [
+        [
+          {
+            "node": "Terminassistent: Bestätigung (Website)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Formular-Bestätigung",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Terminergebnis auswerten (Website)": {
+      "main": [
+        [
+          {
+            "node": "Terminauswahl (Website)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Bevorzugter Zeitraum (Website)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Website-Terminergebnis",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bevorzugter Zeitraum (Website)": {
+      "main": [
+        [
+          {
+            "node": "Kundenauswahl übernehmen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anruf-Anfrage nach Konflikt suchen": {
+      "main": [
+        [
+          {
+            "node": "Anruf-Aufgabe anlegen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Vapi-Antwort vorbereiten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prüfung starten": {
+      "main": [
+        [
+          {
+            "node": "Betriebskonfiguration",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Telefonfunktion wählen": {
+      "main": [
+        [
+          {
+            "node": "Telefon-Terminprüfung vorbereiten",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Telefon-Buchung vorbereiten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Terminassistent: Verfügbarkeit (Telefon)": {
+      "main": [
+        [
+          {
+            "node": "Terminprüfung festhalten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Terminprüfung festhalten": {
+      "main": [
+        [
+          {
+            "node": "Vapi-Antwort vorbereiten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Kunden-ID vereinheitlichen": {
+      "main": [
+        [
+          {
+            "node": "Anfrage zum Vorgang suchen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Anfrage zum Vorgang suchen": {
+      "main": [
+        [
+          {
+            "node": "Bestehenden Vorgang übernehmen",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Bestehenden Vorgang übernehmen": {
+      "main": [
+        [
+          {
+            "node": "Bestehende Anfrage?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Belegt leerer Anruf?": {
+      "main": [
+        [
+          {
+            "node": "Leeren Anruf abschließen",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Abbruch: Vapi ohne verwertbare Daten",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1",
+    "timezone": "Europe/Berlin",
+    "saveExecutionProgress": false,
+    "binaryMode": "separate"
+  },
+  "pinData": {},
+  "active": false
+}
