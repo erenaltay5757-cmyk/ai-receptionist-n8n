@@ -1,4 +1,4 @@
-# AI Receptionist für Handwerksbetriebe – n8n-Prototyp
+# AI Receptionist für Handwerksbetriebe, n8n-Prototyp
 
 Ein n8n-System, das Kundenanfragen per Telefon, Website-Formular und WhatsApp entgegennimmt, mit KI auswertet, in einer Datenbank speichert und für Mitarbeitende zur Bearbeitung vorbereitet.
 
