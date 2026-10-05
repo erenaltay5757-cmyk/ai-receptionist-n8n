@@ -63,18 +63,11 @@ flowchart TD
 
 ## Screenshots
 
-_Screenshots der n8n-Workflows folgen._
-
-<!-- SCREENSHOTS
 **Hauptworkflow in n8n:** drei Eingangskanäle, KI-Analyse, Speicherung und Übergabe.
 ![Hauptworkflow](screenshots/01-hauptworkflow.png)
 
-**KI-Analyse im Detail:** Kontaktdaten und Anliegen werden getrennt, die KI wertet nur das Anliegen aus.
-![KI-Analyse](screenshots/02-ki-analyse.png)
-
 **Terminassistent (Unterworkflow):** Terminvorschläge, Reservierung, Buchung und Übergabe an Mitarbeitende.
 ![Terminassistent](screenshots/03-terminassistent.png)
--->
 
 ## Die wichtigsten Workflow-Teile
 
